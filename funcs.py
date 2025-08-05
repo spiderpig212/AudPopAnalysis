@@ -44,7 +44,7 @@ def hex_to_rgba(hex_color, alpha=1):
 
     return (r, g, b, a)
 
-def plot_rasters(celldb:pd.DataFrame, sortingInds: np.array, trialIndexForEachSpikeAll: list,
+def plot_rasters(celldb:pd.DataFrame, sortingInds: np.ndarray, trialIndexForEachSpikeAll: list,
                  spikeTimesFromEventOnsetAll: list, rows: int=3, cols: int=3,
                  random: bool=True, specificInds: list=None, title: str=None, plot: bool=True,
                  subplot_titles: bool=True) -> plotly.graph_objs._figure.Figure:
@@ -108,7 +108,7 @@ def plot_rasters(celldb:pd.DataFrame, sortingInds: np.array, trialIndexForEachSp
 
     return fig
 
-def plot_psth(celldb:pd.DataFrame, binsStartTime: np.array,
+def plot_psth(celldb:pd.DataFrame, binsStartTime: np.ndarray,
               spikeCountMatAll: list, timeRange: list, trialsEachCond: list, smoothWinSize: int=2,
               rows: int=3, cols: int=3, colors: list=None,
               random: bool=True, specificInds: list=None, title: str=None, plot: bool=True,
@@ -260,7 +260,7 @@ def calculate_fr_arrays(celldb:pd.DataFrame, stimType:str, stimVar:str, timeRang
 
     return [basefr, onsetfr, sustainedfr, offsetfr, stimArray, brainRegion, mouseID]
 
-def calc_d_prime(array1: np.array, array2: np.array) -> np.float32:
+def calc_d_prime(array1: np.ndarray, array2: np.ndarray) -> np.float32:
     """
     Adapted from Sparse Coding in Temporal Association Cortex Improves Complex Sound Discriminability by Feigin et al.
     2021 in J neurosci. Takes in two arrays of shape (nCells, nTrials) where each array is a different stimulus type e.g.
@@ -286,7 +286,7 @@ def calc_d_prime(array1: np.array, array2: np.array) -> np.float32:
     dprime = np.mean(np.sqrt(np.square(mean1 - mean2))) / mean_inner_distance
     return dprime
 
-def calc_fisher_criterion(array1: np.array, array2: np.array) -> np.array:
+def calc_fisher_criterion(array1: np.ndarray, array2: np.ndarray) -> (np.float32, np.ndarray):
     """
     Defined as
 
@@ -305,7 +305,7 @@ def calc_fisher_criterion(array1: np.array, array2: np.array) -> np.array:
     s_B = between-class scatter matrix
     s_W = within-class scatter matrix
 
-    Returns J(w)
+    Returns J(w) and w
 
     Args:
         array1: Array of shape (nCells, nTrials) where each row is a different cell and each column is a different trial.
@@ -333,7 +333,7 @@ def calc_fisher_criterion(array1: np.array, array2: np.array) -> np.array:
 
     w = eigvecs[:, np.argmax(eigvals)]  # Grab the eigenvec corresponding with the largest eigenval
 
-    # Compute Fisher's criterion value
+    # Compute Fisher's criterion value as it should be defined in the docstring
     J = (w.T @ s_B @ w) / (w.T @ s_W @ w)
 
     return J.real, w.real
