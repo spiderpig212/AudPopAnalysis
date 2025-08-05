@@ -1,530 +1,339 @@
-# Functions file for AudPopAnalysis Repo
-
-import numpy as np
-import matplotlib.pyplot as plt
 import os
-from jaratoolbox import celldatabase, settings, ephyscore
-from copy import deepcopy
+import numpy as np
+from numpy import ndarray
+from scipy.ndimage import gaussian_filter1d
+import plotly.colors as colors
+
+from jaratoolbox import celldatabase
+import matplotlib.pyplot as plt
+from jaratoolbox import settings
+from jaratoolbox import extraplots
+from jaratoolbox import spikesanalysis
+from jaratoolbox import ephyscore
+from jaratoolbox import behavioranalysis
+import sys
+import studyparams
+import studyutils
 import pandas as pd
-from sklearn.decomposition import PCA
+import plotly
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+from tqdm import tqdm
 
-# %% Constants
-subject_list = ['feat004', 'feat005', 'feat006', 'feat007', 'feat008', 'feat009', 'feat010']
-recordingDate_list = {
-    'feat004': ['2022-01-11', '2022-01-19', '2022-01-21'],
-    'feat005': ['2022-02-07', '2022-02-08', '2022-02-11', '2022-02-14', '2022-02-15', '2022-02-16'],
-    'feat006': ['2022-02-21', '2022-02-22', '2022-02-24', '2022-02-25', '2022-02-26', '2022-02-28', '2022-03-01', '2022-03-02'],
-    'feat007': ['2022-03-10', '2022-03-11', '2022-03-15', '2022-03-16', '2022-03-18', '2022-03-21'],
-    'feat008': ['2022-03-23', '2022-03-24', '2022-03-25'],
-    'feat009': ['2022-06-04', '2022-06-05', '2022-06-06', '2022-06-07', '2022-06-09', '2022-06-10'],
-    'feat010': ['2022-06-21', '2022-06-22', '2022-06-27', '2022-06-28', '2022-06-30']
-}
-targetSiteNames = ["Primary auditory area", "Dorsal auditory area", "Ventral auditory area"]
-leastCellsArea = 10000
-evoked_start = 0.015
-evoked_end = 0.3
-pt_evoked_end = 0.1
-binWidth = 0.01
-binEdges = np.arange(evoked_start, evoked_end, binWidth)
-binEdgesPT = np.arange(evoked_start, pt_evoked_end, binWidth)
-periodsNameSpeech = ['base200', 'respOnset', 'respSustained']
-max_trials = {'PT': 640, 'AM': 220, 'speech': 381}
-unique_labels = [(0, 0), (0, 33), (0, 67), (0, 100), (33, 100), (67, 100), (100, 100), (100, 67), (100, 33),
-                 (100, 0), (67, 0), (33, 0)]
-min_speech_freq_dict = {(0, 0): 31, (0, 33): 29, (0, 67): 32, (0, 100): 24, (33, 100): 34, (67, 100): 35,
-                        (100, 100): 33, (100, 67): 29, (100, 33): 35, (100, 0): 35, (67, 0): 31, (33, 0): 33}
-frequency_counts_dict = {tuple(freq): [] for freq in unique_labels}
-data_dict = {}
 
-# %% Load dataframe
-databaseDir = os.path.join(settings.DATABASE_PATH, '2024popanalysis')
-fullDbPath = 'celldb_2024popanalysis.h5'
-fullPath = os.path.join(databaseDir, fullDbPath)
-fullDb = celldatabase.load_hdf(fullPath)
-simpleSiteNames = fullDb["recordingSiteName"].str.split(',').apply(lambda x: x[0])
-simpleSiteNames = simpleSiteNames.replace("Posterior auditory area", "Dorsal auditory area")
-fullDb["recordingSiteName"] = simpleSiteNames
-
-
-# %% Initialize plot and subset dataframe
-def load_data(subject, date, targetSiteName, sound_type_load):
-    celldb = fullDb[(fullDb.subject == subject)]
-    celldbSubset = celldb[(celldb.date == date)]
-    celldbSubset = celldbSubset[(celldbSubset.recordingSiteName == targetSiteName)]
-
-    if celldbSubset.empty:
-        print(f"No data in {targetSiteName} on {date} for Speech, AM, and PT.")
-        return None, None, None
-
-    ensemble = ephyscore.CellEnsemble(celldbSubset)
-    try:
-        ephysData, bdata = ensemble.load(sound_type_load)
-    except IndexError:
-        print(f"No FTVOTBorder data for {targetSiteName} on {date} for {subject}")
-        return None, None, None
-
-    return ensemble, ephysData, bdata
-
-
-# Calculate Spike Rate
-def spike_rate(sound_type, ensemble, ephysData, bdata, targetSiteName):
-    '''Calculate firing rate as spikes per second evoked
-            sound_type: str sound type label. ex. "speech"
-            ensemple: ephyscore.CellEnsemble(celldbSubset)
-            ephysData: ephyscore.CellEnsemble(celldbSubset)
-            bdata: ephyscore.CellEnsemble(celldbSubset)
-            targetSiteName: str brain area ex. "Primary auditory area"
-
-        Returns X array (spikeRateNormalized) of firing rates for specified sound type and brain area (trials, neurons)
-                Y brain area meta data (Y_brain_area_array) brain area meta data for each neuron
-                Y sound frequency (Hrz) (Y_frequency) meta data for each trial
-    '''
-    X_array = []
-
-    if sound_type == "speech":
-        eventOnsetTimes = ephysData['events']['stimOn']
-        _, _, _ = ensemble.eventlocked_spiketimes(eventOnsetTimes, [evoked_start, evoked_end])
-        spikeCounts = ensemble.spiketimes_to_spikecounts(binEdges)
-        sumEvokedFR = spikeCounts.sum(axis=2)
-        spikesPerSecEvoked = sumEvokedFR / (evoked_end - evoked_start)
-
-        FTParamsEachTrial = bdata['targetFTpercent']
-        VOTParamsEachTrial = bdata['targetVOTpercent']
-        nTrials = len(bdata['targetFTpercent'])
-
-        # Create and sort Y_frequency for speech
-        Y_frequency = np.array([(FTParamsEachTrial[i], VOTParamsEachTrial[i]) for i in range(nTrials)])
-
-    if sound_type == "AM":
-        nTrials = len(bdata['currentFreq'])
-        eventOnsetTimes = ephysData['events']['stimOn'][:nTrials]
-        _, _, _ = ensemble.eventlocked_spiketimes(eventOnsetTimes, [evoked_start, evoked_end])
-        spikeCounts = ensemble.spiketimes_to_spikecounts(binEdges)
-        sumEvokedFR = spikeCounts.sum(axis=2)
-        spikesPerSecEvoked = sumEvokedFR / (evoked_end - evoked_start)
-
-        # Create and sort Y_frequency for AM/PT
-        Y_frequency = np.array(bdata['currentFreq'])
-
-    if sound_type == "PT":
-        nTrials = len(bdata['currentFreq'])
-        eventOnsetTimes = ephysData['events']['stimOn'][:nTrials]
-        _, _, _ = ensemble.eventlocked_spiketimes(eventOnsetTimes, [evoked_start, pt_evoked_end])
-        spikeCounts = ensemble.spiketimes_to_spikecounts(binEdgesPT)
-        sumEvokedFR = spikeCounts.sum(axis=2)
-        spikesPerSecEvoked = sumEvokedFR / (evoked_end - pt_evoked_end)
-
-        # Create and sort Y_frequency for AM/PT
-        Y_frequency = np.array(bdata['currentFreq'])
-
-    trialMeans = spikesPerSecEvoked.mean(axis=1)
-    spikesPerSecEvokedNormalized = spikesPerSecEvoked.T - trialMeans  # why negative
-    spikesPerSecEvokedNormalized = spikesPerSecEvokedNormalized.T
-
-    if spikesPerSecEvokedNormalized.shape[1] > leastCellsArea:
-        subsetIndex = np.random.choice(spikesPerSecEvokedNormalized.shape[1], leastCellsArea, replace=False)
-        spikeRateNormalized = spikesPerSecEvokedNormalized[:, subsetIndex]
-    else:
-        spikeRateNormalized = spikesPerSecEvokedNormalized
-
-    Y_brain_area_array = [targetSiteName] * spikeRateNormalized.shape[0]
-
-    return spikeRateNormalized, Y_brain_area_array, Y_frequency
-
-
-def adjust_array_and_labels(x_array, y_array, Y_brain_area_PT, max_length, subject, date, targetSiteName):
-    # Check if any row in x_array has fewer than max_length trials
-    if x_array.shape[1] < max_length:
-        print(f"Not enough PT trials recorded for subject {subject}, on {date} in brain area {targetSiteName}.")
-        return None, None, None
-    else:
-        adjusted_x = x_array[:, :max_length]  # Truncate across all neurons
-
-    adjusted_y = y_array[:max_length]
-    adjusted_yba = Y_brain_area_PT[:max_length]
-
-    return adjusted_x, adjusted_y, adjusted_yba
-
-
-def sort_x_arrays(X_list, indices, sound_type):
-    sorted_x_list = []
-    for x in X_list:
-        if sound_type == "am" or sound_type == "pt":
-            sorted_x = x[indices]
-            sorted_x_list.append(np.array(sorted_x))
-        if sound_type == "speech":
-            sorted_x = x[indices]
-            sorted_x_list.append(np.array(sorted_x))
-    return sorted_x_list
-
-
-# Function to randomly select neurons based on the min_neuron_dict
-def select_neurons(data, brain_area, min_neuron_dict):
-    # Check if brain area in dictionary and apply subsampling if necessary
-    if brain_area in min_neuron_dict:
-        n_neurons_to_select = min_neuron_dict[brain_area]
-        total_neurons = data.shape[1]
-
-        # Ensure that we don't select more neurons than are available
-        if total_neurons > n_neurons_to_select:
-            selected_indices = np.random.choice(total_neurons, n_neurons_to_select, replace=False)
-            data = data[:, selected_indices]
-        else:
-            print(f"Not enough neurons in {brain_area}, using all {total_neurons} neurons.")
-    return data
-
-
-def create_figure_grid(rows, cols, title, figsize=(18, 10)):
-    fig, axes = plt.subplots(rows, cols, figsize=figsize)
-    fig.suptitle(title, fontsize=16)
-    fig.subplots_adjust(hspace=0.4, wspace=0.4)
-    return fig, axes
-
-
-def min_speech_dict(Y_frequency_speech, X_speech, subject, date, targetSiteName, previous_frequency_speech):
-    valid_indices = []
-    freq_kept_counts = {tuple(freq): 0 for freq in unique_labels}
-
-    # Filter the trials for each frequency based on min_speech_freq_dict
-    for i, freq in enumerate(Y_frequency_speech[0]):
-        freq_tuple = tuple(freq)
-        # Check if the count for this frequency hasn't exceeded the minimum allowed count
-        if freq_kept_counts[freq_tuple] < min_speech_freq_dict[freq_tuple]:
-            valid_indices.append(i)
-            freq_kept_counts[freq_tuple] += 1
-
-    # Filter X_speech and Y arrays based on valid indices
-    if len(valid_indices) < max_trials['speech']:
-        print(
-            f'Not enough speech trials for subject {subject}, on {date} in brain area {targetSiteName}')
-        pass
-    else:
-        X_speech = np.array(X_speech)
-        X_speech = X_speech.T
-        X_speech_filtered = X_speech[valid_indices]
-        X_speech_filtered = X_speech_filtered.T
-        Y_frequency_speech_filtered = Y_frequency_speech[0][valid_indices]
-    return X_speech, X_speech_filtered, Y_frequency_speech_filtered
-
-
-def adjust_speech_length(subject, date, brain_area, X_speech, Y_frequency_speech, Y_brain_area_speech, previous_frequency_speech):
-    valid_indices = []
-    freq_kept_counts = {tuple(freq): 0 for freq in unique_labels}
-
-    # Filter valid trials based on frequency count
-    for i, freq in enumerate(Y_frequency_speech):
-        freq_tuple = tuple(freq)
-        if freq_kept_counts[freq_tuple] < min_speech_freq_dict[freq_tuple]:
-            valid_indices.append(i)
-            freq_kept_counts[freq_tuple] += 1
-
-    # Filter X_speech and Y arrays based on valid indices
-    if len(valid_indices) < max_trials['speech']:
-        print(f'Not enough speech trials for subject {subject}, on {date} in brain area {brain_area}')
-        return None, None, None, None
-    else:
-        X_speech = np.array(X_speech)
-        X_speech = X_speech.T
-        X_speech_filtered = X_speech[valid_indices]
-        X_speech_filtered = X_speech_filtered.T
-        Y_frequency_speech_filtered = Y_frequency_speech[valid_indices]
-
-        if len(X_speech_filtered) != 0:
-            # Sort Y_frequency_speech_adjusted
-            if isinstance(Y_frequency_speech_filtered, list):
-                Y_frequency_speech_filtered = np.array(Y_frequency_speech_filtered)
-
-            # Use np.lexsort to sort by the second element of the tuple first, and then by the first element
-            indices_speech = np.lexsort(
-                (Y_frequency_speech_filtered[:, 1], Y_frequency_speech_filtered[:, 0]))
-
-            # Use these sorted indices to rearrange the array
-            Y_frequency_speech_sorted = Y_frequency_speech_filtered[indices_speech]
-
-            # Check if frequency lists are all the same
-            if previous_frequency_speech is not None:
-                assert np.array_equal(Y_frequency_speech_sorted, previous_frequency_speech), (
-                    f"Frequency mismatch for subject: {subject}, date: {date}, target site: {brain_area}"
-                    f"Previous: {previous_frequency_speech} and sorted: {Y_frequency_speech_sorted}")
-
-            previous_frequency_speech = deepcopy(Y_frequency_speech_sorted)
-
-        return X_speech_filtered, Y_frequency_speech_sorted, previous_frequency_speech, indices_speech
-
-
-def sort_sound_array(subject, date, brain_area, X_adjusted, Y_brain_area_all, Y_frequency_adjusted, previous_frequency):
-    X_all = None
-    Y_brain_area_all_combined = None
-
-    if X_adjusted is not None:
-        if len(X_adjusted) != 0:
-            # Sort Y_frequency_AM_adjusted
-            Y_frequency = np.array(Y_frequency_adjusted)
-            sorted_indices = np.argsort(Y_frequency)
-            sorted_Y_freq = Y_frequency[sorted_indices]
-            Y_frequency_sorted = sorted_Y_freq
-
-            Y_frequency_sorted = np.array(Y_frequency_sorted)
-            indices = np.argsort(Y_frequency_sorted)  # Sort by frequency values
-
-            # Check if frequency lists are all the same
-            if previous_frequency is not None:
-                assert np.array_equal(Y_frequency_sorted, previous_frequency), (
-                    f"Frequency mismatch for subject: {subject}, date: {date}, target site: {brain_area}")
-            previous_frequency = deepcopy(Y_frequency_sorted)
-
-            # Concatenate data instead of extending lists
-            if X_all is None:
-                X_all = X_adjusted
-            else:
-                X_all = np.concatenate((X_all, X_adjusted), axis=0)
-
-            if Y_brain_area_all_combined is None:
-                Y_brain_area_all_combined = Y_brain_area_all
-            else:
-                Y_brain_area_all_combined = np.concatenate((Y_brain_area_all_combined, Y_brain_area_all), axis=0)
-    else:
-        return None, None, None, previous_frequency, None
-
-    return X_all, Y_frequency_sorted, Y_brain_area_all_combined, previous_frequency, indices
-
-
-def sort_speech_frequencies(X_speech_filtered, Y_frequency_speech_filtered, subject, date, targetSiteName,
-                            previous_frequency_speech):
-    if len(X_speech_filtered) != 0:
-        # Sort Y_frequency_speech_adjusted
-        if isinstance(Y_frequency_speech_filtered, list):
-            Y_frequency_speech_filtered = np.array(Y_frequency_speech_filtered[0])
-
-        # Use np.lexsort to sort by the second element of the tuple first, and then by the first element
-        indices_speech = np.lexsort(
-            (Y_frequency_speech_filtered[:, 1], Y_frequency_speech_filtered[:, 0]))
-
-        # Use these sorted indices to rearrange the array
-        Y_frequency_speech_sorted = Y_frequency_speech_filtered[indices_speech]
-
-        # Check if frequency lists are all the same
-        if previous_frequency_speech is not None:
-            assert np.array_equal(Y_frequency_speech_sorted, previous_frequency_speech), (
-                f"Frequency mismatch for subject: {subject}, date: {date}, target site: {targetSiteName}")
-        previous_frequency_speech = deepcopy(Y_frequency_speech_sorted)
-    return Y_frequency_speech_sorted, indices_speech, previous_frequency_speech
-
-
-def clean_and_concatenate(subject, recordingDate_list, targetSiteName, previous_frequency_AM, previous_frequency_PT, previous_frequency_speech):
-    global X_speech_array, X_AM_array, X_PT_array, Y_frequency_speech_sorted, Y_frequency_AM_sorted, Y_frequency_pureTones_sorted
-    y_max = 0.17
-    X_speech_all = []
-    Y_brain_area_speech_all = []
-    X_AM_all = []
-    Y_brain_area_AM_all = []
-    X_pureTones_all = []
-    Y_brain_area_PT_all = []
-    indices_AM = None
-    indices_PT = None
-    indices_speech = None
-
-    for date in recordingDate_list[subject]:
-        # Load and process data for Speech
-        speechEnsemble, speechEphys, speechBdata = load_data(subject, date, targetSiteName,
-                                                             "FTVOTBorders")
-        if speechEnsemble:
-            X_speech, Y_brain_area_speech, Y_frequency_speech = spike_rate(
-                "speech", speechEnsemble, speechEphys, speechBdata, targetSiteName)
-
-            # Initialize valid indices to keep only the trials matching the minimum occurrences
-            valid_indices = []
-            freq_kept_counts = {tuple(freq): 0 for freq in unique_labels}
-
-            # Filter the trials for each frequency based on min_speech_freq_dict
-            for i, freq in enumerate(Y_frequency_speech[0]):
-                freq_tuple = tuple(freq)
-                # Check if the count for this frequency hasn't exceeded the minimum allowed count
-                if freq_kept_counts[freq_tuple] < min_speech_freq_dict[freq_tuple]:
-                    valid_indices.append(i)
-                    freq_kept_counts[freq_tuple] += 1
-
-            # Filter X_speech and Y arrays based on valid indices
-            if len(valid_indices) < max_trials['speech']:
-                print(
-                    f'Not enough speech trials for subject {subject}, on {date} in brain area {targetSiteName}')
-                pass
-            else:
-                X_speech = np.array(X_speech)
-                X_speech = X_speech.T
-                X_speech_filtered = X_speech[valid_indices]
-                X_speech_filtered = X_speech_filtered.T
-                Y_frequency_speech_filtered = Y_frequency_speech[0][valid_indices]
-
-                if len(X_speech_filtered) != 0:
-                    # Sort Y_frequency_speech_adjusted
-                    if isinstance(Y_frequency_speech_filtered, list):
-                        Y_frequency_speech_filtered = np.array(Y_frequency_speech_filtered[0])
-
-                    # Use np.lexsort to sort by the second element of the tuple first, and then by the first
-                    # element
-                    indices_speech = np.lexsort(
-                        (Y_frequency_speech_filtered[:, 1], Y_frequency_speech_filtered[:, 0]))
-
-                    # Use these sorted indices to rearrange the array
-                    Y_frequency_speech_sorted = Y_frequency_speech_filtered[indices_speech]
-
-                    # Check if frequency lists are all the same
-                    if previous_frequency_speech is not None:
-                        assert np.array_equal(Y_frequency_speech_sorted, previous_frequency_speech), (
-                            f"Frequency mismatch for subject: {subject}, date: {date}, target site: {targetSiteName}")
-                    previous_frequency_speech = deepcopy(Y_frequency_speech_sorted)
-
-                # Append to lists
-                X_speech_all.extend([X_speech_filtered])
-                Y_brain_area_speech_all.extend(Y_brain_area_speech)
-        else:
-            continue
-
-        # Load and process data for AM
-        amEnsemble, amEphys, amBdata = load_data(subject, date, targetSiteName, "AM")
-        if amEnsemble:
-            X_AM, Y_brain_area_AM, Y_frequency_AM = spike_rate(
-                "AM", amEnsemble, amEphys, amBdata, targetSiteName)
-
-            # Apply adjustments
-            X_AM_adjusted, Y_frequency_AM_adjusted, Yba_AM_adj, ignored_x_AM, ignored_y_AM, ignored_yba_AM = (
-                adjust_array_and_labels(X_AM, Y_frequency_AM, Y_brain_area_AM, max_trials['AM'], subject,
-                                        date,
-                                        targetSiteName))
-
-            if len(X_AM_adjusted) != 0:
-                # Sort Y_frequency_AM_adjusted
-                Y_frequency_AM = np.array(Y_frequency_AM_adjusted)
-                sorted_indices = np.argsort(Y_frequency_AM)
-                sorted_Y_freq = Y_frequency_AM[0][sorted_indices]
-                Y_frequency_AM_sorted = sorted_Y_freq
-
-                Y_frequency_AM_sorted = np.array(Y_frequency_AM_sorted[0])
-                indices_AM = np.argsort(Y_frequency_AM_sorted)  # Sort by frequency values
-
-                # Check if frequency lists are all the same
-                if previous_frequency_AM is not None:
-                    assert np.array_equal(Y_frequency_AM_sorted, previous_frequency_AM), (
-                        f"Frequency mismatch for subject: {subject}, date: {date}, target site: {targetSiteName}")
-                previous_frequency_AM = deepcopy(Y_frequency_AM_sorted)
-
-            # Append to lists
-            X_AM_all.extend(X_AM_adjusted)
-            Y_brain_area_AM_all.extend(Yba_AM_adj)
-        else:
-            continue
-
-        # Load and process data for Pure Tones
-        ptEnsemble, ptEphys, ptBdata = load_data(subject, date, targetSiteName, "pureTones")
-        if ptEnsemble:
-            X_pureTones, Y_brain_area_PT, Y_frequency_pureTones = spike_rate(
-                "PT", ptEnsemble, ptEphys, ptBdata, targetSiteName)
-
-            # Apply adjustments
-            X_PT_adjusted, Y_frequency_PT_adjusted, Yba_PT_adj, ignored_x_PT, ignored_y_PT, ignored_yba_PT = (
-                adjust_array_and_labels(X_pureTones, Y_frequency_pureTones, Y_brain_area_PT,
-                                        max_trials['PT'],
-                                        subject, date, targetSiteName))
-
-            if len(X_PT_adjusted) != 0:
-                # Convert Y_frequency_pureTones_adjusted
-                Y_frequency_pureTones = np.array(Y_frequency_PT_adjusted)
-                sorted_indices = np.argsort(Y_frequency_pureTones)
-                sorted_Y_freq = Y_frequency_pureTones[0][sorted_indices]
-                Y_frequency_pureTones_sorted = sorted_Y_freq
-
-                Y_frequency_pureTones_sorted = np.array(Y_frequency_pureTones_sorted[0])
-                indices_PT = np.argsort(Y_frequency_pureTones_sorted)  # Sort by frequency values
-
-                # Check if frequency lists are all the same
-                if previous_frequency_PT is not None:
-                    assert np.array_equal(Y_frequency_pureTones_sorted, previous_frequency_PT), (
-                        f"Frequency mismatch for subject: {subject}, date: {date}, target site: {targetSiteName}")
-                previous_frequency_PT = deepcopy(Y_frequency_pureTones_sorted)
-
-            # Append to the lists
-            X_pureTones_all.extend(X_PT_adjusted)
-            Y_brain_area_PT_all.extend(Yba_PT_adj)
-        else:
-            continue
-    if X_AM_all:
-        X_AM_sorted = sort_x_arrays(X_AM_all, indices_AM, "am")
-        X_AM_array = np.concatenate(X_AM_sorted, axis=0)
-    if X_pureTones_all:
-        X_PT_sorted = sort_x_arrays(X_pureTones_all, indices_PT, "pt")
-        X_PT_array = np.concatenate(X_PT_sorted, axis=0)
-    if X_speech_all:
-        X_speech_sorted = sort_x_arrays(X_speech_all, indices_speech, "speech")
-        X_speech_array = np.concatenate(X_speech_sorted, axis=0)
-
-    return (X_speech_array, X_AM_array, X_PT_array, Y_brain_area_speech_all, Y_brain_area_AM_all, Y_brain_area_PT_all,
-            Y_frequency_speech_sorted, Y_frequency_AM_sorted, Y_frequency_pureTones_sorted)
-
-
-def calculate_participation_ratio(explained_variance_ratio):
-    return ((np.sum(explained_variance_ratio)) ** 2) / np.sum(explained_variance_ratio ** 2)
-
-
-def plot_scree_plot(ax, data, title, y_max, particRatio, color='black'):
-    # Perform PCA
-    pca = PCA()
-    pca.fit(data)
-    explained_variance_ratio = pca.explained_variance_ratio_
-
-    # Plot settings
-    x_max = min(len(explained_variance_ratio), 11)
-    ax.bar(range(x_max), explained_variance_ratio[:x_max], color=color)
-
-    # Axis formatting
-    ax.set_xticks(range(x_max))
-    ax.set_xlim(0, 11)
-    ax.set_ylim(0, y_max)
-
-    # Participation ratio annotation
-    ax.text(0.5, 0.9,
-            f"Participation Ratio = {particRatio:.3f}",
-            transform=ax.transAxes,
-            ha='center', va='center',
-            fontsize=28,
-            bbox=dict(boxstyle='round,pad=0.3', facecolor='white', edgecolor='gray', alpha=0.6))
-
-
-def plot_2d_pca(ax, data, labels, title, cmap):
+def hex_to_rgba(hex_color, alpha=1):
     """
-    Plots 2D PCA of the input data on the given axis.
+    Converts a hexadecimal color string (e.g., "#RRGGBB" or "#RRGGBBAA")
+    to an RGBA tuple (R, G, B, A), where A is between 0 and 1.
+    """
+    hex_color = hex_color.lstrip('#')  # Remove '#' if present
 
-    Parameters:
-    - ax: Matplotlib axis object to plot on.
-    - data: Dictionary containing data['X'] (features) and optionally other keys.
-    - labels: Array-like, labels for coloring the data points.
-    - title: Title of the plot.
-    - cmap: Colormap for the scatter plot (default: 'viridis').
+    if len(hex_color) == 6:
+        # Assume full opacity if no alpha component is provided
+        r = int(hex_color[0:2], 16)
+        g = int(hex_color[2:4], 16)
+        b = int(hex_color[4:6], 16)
+        a = alpha
+    elif len(hex_color) == 8:
+        r = int(hex_color[0:2], 16)
+        g = int(hex_color[2:4], 16)
+        b = int(hex_color[4:6], 16)
+        a = alpha
+    else:
+        raise ValueError("Invalid hex color format. Expected 6 or 8 characters.")
+
+    return (r, g, b, a)
+
+def plot_rasters(celldb:pd.DataFrame, sortingInds: np.array, trialIndexForEachSpikeAll: list,
+                 spikeTimesFromEventOnsetAll: list, rows: int=3, cols: int=3,
+                 random: bool=True, specificInds: list=None, title: str=None, plot: bool=True,
+                 subplot_titles: bool=True) -> plotly.graph_objs._figure.Figure:
+
+    n_cells = rows*cols
+    if random:
+        someCells = celldb.sample(n=n_cells).index.tolist()
+    elif random == False and specificInds is not None:
+        someCells = specificInds
+    elif random == False and specificInds is None:
+        someCells = np.arange(n_cells)
+
+    # Initialize subplots with shared X and Y axes
+    fig = make_subplots(
+        rows=rows, cols=cols,
+        shared_xaxes=False, shared_yaxes=True,
+        subplot_titles=celldb.loc[someCells]['simpleSiteName'].to_list() if subplot_titles else None,
+    )
+
+    for count, indcell in enumerate(someCells):
+        row = count // 3 + 1
+        col = count % 3 + 1
+
+        sortedIndexForEachSpike = sortingInds[trialIndexForEachSpikeAll[indcell]]
+        fig.add_trace(
+            go.Scatter(
+                x=spikeTimesFromEventOnsetAll[indcell],
+                y=sortedIndexForEachSpike,
+                mode='markers',
+                marker=dict(size=2, color='black'),
+                name=f'Cell {indcell}'
+            ),
+            row=row, col=col
+        )
+        # Add axis labels
+        fig.update_xaxes(title_text="Time (s)", row=row, col=col)
+        fig.update_yaxes(title_text=f"[{indcell}] Sorted trials", row=row, col=col)
+
+    fig.add_vline(
+        x=0,
+        line=dict(color='red', width=2),  # Customize color and width
+    )
+
+    if title is not None:
+        fig.update_layout(
+            title=title,
+            showlegend=False,
+            height=400 * rows,
+            width=1200,
+            title_font=dict(size=16, family='Arial', color='black')
+        )
+    else:
+        fig.update_layout(
+            showlegend=False,
+            height=400 * rows,
+            width=1200,
+        )
+
+    if plot:
+        fig.show();
+
+    return fig
+
+def plot_psth(celldb:pd.DataFrame, binsStartTime: np.array,
+              spikeCountMatAll: list, timeRange: list, trialsEachCond: list, smoothWinSize: int=2,
+              rows: int=3, cols: int=3, colors: list=None,
+              random: bool=True, specificInds: list=None, title: str=None, plot: bool=True,
+              subplot_titles: bool=True, possibleStim: ndarray=None, downsamplefactor: int=1,
+              hidesamples: int=0, repeat_sound: bool=False) -> plotly.graph_objs._figure.Figure:
+    n_cells = rows*cols
+    if random:
+        someCells = celldb.sample(n=n_cells).index.tolist()
+    elif random == False and specificInds is not None:
+        someCells = specificInds
+    elif random == False and specificInds is None:
+        someCells = np.arange(n_cells)
+
+    fig = make_subplots(
+            rows=rows, cols=cols,
+            shared_xaxes=False, shared_yaxes=True,
+            subplot_titles=celldb.loc[someCells]['simpleSiteName'].to_list() if subplot_titles else None,
+        )
+
+    nTrials = spikeCountMatAll.shape[1]
+    winShape = np.concatenate((np.zeros(smoothWinSize), np.ones(smoothWinSize)))  # Square (causal)
+    winShape = winShape / np.sum(winShape)
+    if not repeat_sound:
+        (trialsEachCond, nTrialsEachCond, nCond) = extraplots.trials_each_cond_inds(trialsEachCond, nTrials)
+    elif repeat_sound:
+        nCond = len(trialsEachCond)
+
+    for index_cond in range(nCond):
+        thisCondCounts = spikeCountMatAll[someCells, trialsEachCond[index_cond], :]
+        thisPSTH = np.mean(thisCondCounts, axis=0)
+        smoothPSTH = np.convolve(thisPSTH, winShape, mode='same')
+        sSlice = slice(hidesamples, len(smoothPSTH) - hidesamples, downsamplefactor)
+
+        if possibleStim is not None:
+            stimVal = possibleStim[index_cond]
+            if repeat_sound:
+                stimVal = f"{stimVal + '_' + str(index_cond % 4)}"
+        if colors:
+            hex_color = colors[index_cond % len(colors)]
+            color = 'rgba' + str(hex_to_rgba(hex_color, 0.7))
+        else:
+            color = "blue"
+        fig.add_trace(go.Scatter(
+            x=binsStartTime[sSlice],
+            y=smoothPSTH[sSlice],
+            name=f"{stimVal}",
+            mode='lines',
+            line=dict(color=color, width=1),
+        ))
+
+    fig.update_layout(showlegend=False)
+    if plot:
+        fig.show();
+
+    return fig
+
+
+def calculate_fr_arrays(celldb:pd.DataFrame, stimType:str, stimVar:str, timeRange:list, allPeriods:list) -> list:
+    """
+    Calculates the firing rate arrays for given cell data, stimulus type, and time range.
+
+    This function processes a given set of cell data from a DataFrame alongside the
+    corresponding stimulus type and a specified time range. It calculates the firing
+    rate arrays for different response periods, such as baseline, onset response, and
+    sustained response periods. The calculations take into account the number of cells,
+    categories, and specified time ranges provided.
+
+    Args:
+        celldb (pd.DataFrame): A DataFrame containing cell information for tracking relevant ephys data.
+        stimType (str): The type of stimulus used in the experiment. Valid values are 'Sine', 'naturalSound', and
+        'AM'.
+        stimVar (str): The name of the variable in the behavior data representing the stimulus.
+        timeRange (list): A list specifying the time range to analyze, in the form
+            [start_time, end_time].
+        allPeriods (list): A list of tuples/lists specifying the periods to analyze. Assumes order of
+        [baseline, onset, sustained, offset].
 
     Returns:
-    - scatter: The scatter plot object for further customization if needed.
+        list: A list containing the calculated firing rate arrays for all periods and an array of trial stims
+        [baseline, onset, sustained, offset, stimArray]
     """
-    pca = PCA(n_components=2)
-    transformed_data = pca.fit_transform(data['X'])
+    nCells = len(celldb)
+    periodDuration = [x[1] - x[0] for x in allPeriods]
 
-    explained_variance = pca.explained_variance_ratio_
+    if stimType == 'AM':
+        nTrials = 220
+        nCategories = 11
+    elif stimType == 'naturalSound':
+        nTrials = 200
+        nCategories = len(studyparams.SOUND_CATEGORIES)
+    elif stimType == 'pureTones':
+        nTrials = 320
+        nCategories = 16
+    else:
+        raise ValueError(f"Unrecognized stimulus type: {stimType}. Should be in ['AM', 'naturalSound', 'pureTones']")
 
-    scatter = ax.scatter(transformed_data[:, 0], transformed_data[:, 1], c=labels, cmap=cmap, s=32)
+    basefr = np.full((nCells, nTrials), np.nan)
+    onsetfr = np.full((nCells, nTrials), np.nan)
+    sustainedfr = np.full((nCells, nTrials), np.nan)
+    offsetfr = np.full((nCells, nTrials), np.nan)
+    stimArray = np.full((nCells, nTrials), np.nan)
+    brainRegion = np.empty(nCells, object)
+    mouseID = np.empty(nCells, object)
 
-    ax.set_xlabel(f'PCA 1 ({explained_variance[0] * 100:.2f}% variance)')
-    ax.set_ylabel(f'PCA 2 ({explained_variance[1] * 100:.2f}% variance)')
+    num_iterations = len(celldb)
+    indCell = -1
+    for indRow, dbRow in tqdm(celldb.iterrows(), total=num_iterations, desc=f"Calculating firing rates for {stimType}"):
+        indCell += 1
+        oneCell = ephyscore.Cell(dbRow)
+        ephysData, bdata = oneCell.load(stimType)
 
-    return scatter
+        spikeTimes = ephysData['spikeTimes']
+        eventOnsetTimes = ephysData['events']['stimOn'][:nTrials]
+        currentStim = bdata[stimVar][:nTrials]
 
-def euclidean_distance(vec1, vec2):
-    vec1 = np.array(vec1)
-    vec2 = np.array(vec2)
-    return np.linalg.norm(vec1 - vec2)
+        # -- Test if trials from behavior don't match ephys -- Shouldn't matter since I am manually subsetting both above
+        if (len(currentStim) > len(eventOnsetTimes)) or \
+                (len(currentStim) < len(eventOnsetTimes) - 1):
+            print(f'[{indRow}] Warning! BevahTrials ({len(currentStim)}) and ' +
+                  f'EphysTrials ({len(eventOnsetTimes)})')
+            continue
+        if len(currentStim) == len(eventOnsetTimes) - 1:
+            eventOnsetTimes = eventOnsetTimes[:len(currentStim)]
 
+        (spikeTimesFromEventOnset, trialIndexForEachSpike, indexLimitsEachTrial) = \
+            spikesanalysis.eventlocked_spiketimes(spikeTimes, eventOnsetTimes, timeRange)
 
-def trial_distances(trials, mean_vec):
-    distances = []
-    for trial in trials:
-        dist = sum((x - m) ** 2 for x, m in zip(trial, mean_vec)) ** 0.5
-        distances.append(dist)
-    return distances
+        spikesEachTrialEachPeriod = []
+        for indPeriod, period in enumerate(allPeriods):
+            spikeCountMat = spikesanalysis.spiketimes_to_spikecounts(spikeTimesFromEventOnset,
+                                                                     indexLimitsEachTrial, period)
+            spikesEachTrial = spikeCountMat[:, 0]
+            spikesEachTrialEachPeriod.append(spikesEachTrial)
+
+        # for indcond in range(nCategories):
+            # trialsThisCond = trialsEachCateg[:, indcond]
+        firingRateBase = spikesEachTrialEachPeriod[0] / periodDuration[0]
+        firingRateOnset = spikesEachTrialEachPeriod[1] / periodDuration[1]
+        firingRateSustain = spikesEachTrialEachPeriod[2] / periodDuration[2]
+        firingRateOffset = spikesEachTrialEachPeriod[3] / periodDuration[3]
+
+        basefr[indCell, :] = firingRateBase
+        onsetfr[indCell, :] = firingRateOnset
+        sustainedfr[indCell, :] = firingRateSustain
+        offsetfr[indCell, :] = firingRateOffset
+        stimArray[indCell, :] = currentStim
+        brainRegion[indCell] = dbRow['simpleSiteName']
+        mouseID[indCell] = dbRow['subject']
+
+    return [basefr, onsetfr, sustainedfr, offsetfr, stimArray, brainRegion, mouseID]
+
+def calc_d_prime(array1: np.array, array2: np.array) -> np.float32:
+    """
+    Adapted from Sparse Coding in Temporal Association Cortex Improves Complex Sound Discriminability by Feigin et al.
+    2021 in J neurosci. Takes in two arrays of shape (nCells, nTrials) where each array is a different stimulus type e.g.
+    for pure tones array1 may be 12 kHz and array2 may be 20 kHz. d' is defined as
+
+    d' = euc_distance(mean(array1), mean(array2)) / mean(inner_distance(array1), inner_distance(array2)))
+
+    where means are trial-averages and inner_distance is the Euclidean distance between each trial firing rate and the
+    mean stimulus firing rate, followed by averaging over the differences (size nTrials) to get a scaler.
+
+    Args:
+        array1: Array of shape (nCells, nTrials) where each row is a different cell and each column is a different trial.
+        array2: Array of shape (nCells, nTrials) where each row is a different cell and each column is a different trial.
+        array2 should be a different stimulus type than array1, otherwise d' will be zero.
+
+    Returns:
+
+    """
+    mean1 = np.mean(array1, axis=1)
+    mean2 = np.mean(array2, axis=1)
+    mean_inner_distance = np.mean((np.mean(np.sqrt(np.square(array1 - mean1[:, np.newaxis])), axis=1),
+                                   np.mean(np.sqrt(np.square(array2 - mean2[:, np.newaxis])), axis=1)))  # Creates an array of shape nNeurons for each input, then averages them to single value
+    dprime = np.mean(np.sqrt(np.square(mean1 - mean2))) / mean_inner_distance
+    return dprime
+
+def calc_fisher_criterion(array1: np.array, array2: np.array) -> np.array:
+    """
+    Defined as
+
+    J(w) = (m_1 - m_2)^2 / (s_1^2 + s_2^2)
+
+    where
+    m_1 = np.mean(x_1 @ w), which is mean along projection w,
+    s_1 = np.var(x_1 @ w), which is the scatter along projection w,
+    and x_1 is first data set/array.
+
+    For higher dimensions, it can be instead defined as:
+
+    J(w) = (w^T * s_B * w) / (w^T * s_W * w)
+
+    where
+    s_B = between-class scatter matrix
+    s_W = within-class scatter matrix
+
+    Returns J(w)
+
+    Args:
+        array1: Array of shape (nCells, nTrials) where each row is a different cell and each column is a different trial.
+        array2: Array of shape (nCells, nTrials) where each row is a different cell and each column is a different trial.
+        array2 should be a different stimulus type than array1, otherwise result will be zero
+
+    Returns:
+
+    """
+    m1 = np.mean(array1, axis=0)
+    m2 = np.mean(array2, axis=0)
+
+    # Compute within-class
+    s1 = np.cov(array1, rowvar=False)
+    s2 = np.cov(array2, rowvar=False)
+    s_W = s1 + s2
+
+    # Compute between-class
+    mean_diff = (m1 - m2).reshape(-1, 1)
+    s_B = mean_diff @ mean_diff.T
+
+    # Solve generalized eigenvalue problem for w
+    # Equivalent to maximizing J(w) = w^T s_B w / w^T s_W w, which should be same as what is defined above
+    eigvals, eigvecs = np.linalg.eig(np.linalg.pinv(s_W) @ s_B)
+
+    w = eigvecs[:, np.argmax(eigvals)]  # Grab the eigenvec corresponding with the largest eigenval
+
+    # Compute Fisher's criterion value
+    J = (w.T @ s_B @ w) / (w.T @ s_W @ w)
+
+    return J.real, w.real
