@@ -1,20 +1,19 @@
 import os
-import numpy as np
 from numpy import ndarray
-from scipy.ndimage import gaussian_filter1d
 import plotly.colors as colors
+from sklearn.decomposition import PCA
 
-from jaratoolbox import celldatabase
-import matplotlib.pyplot as plt
 from jaratoolbox import settings
 from jaratoolbox import extraplots
 from jaratoolbox import spikesanalysis
 from jaratoolbox import ephyscore
-from jaratoolbox import behavioranalysis
 import sys
 import studyparams
 import studyutils
 import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+from matplotlib.ticker import MaxNLocator
 import plotly
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
@@ -212,6 +211,7 @@ def calculate_fr_arrays(celldb:pd.DataFrame, stimType:str, stimVar:str, timeRang
     stimArray = np.full((nCells, nTrials), np.nan)
     brainRegion = np.empty(nCells, object)
     mouseID = np.empty(nCells, object)
+    sessionID = np.empty(nCells, object)
 
     num_iterations = len(celldb)
     indCell = -1
@@ -257,8 +257,9 @@ def calculate_fr_arrays(celldb:pd.DataFrame, stimType:str, stimVar:str, timeRang
         stimArray[indCell, :] = currentStim
         brainRegion[indCell] = dbRow['simpleSiteName']
         mouseID[indCell] = dbRow['subject']
+        sessionID[indCell] = dbRow['date']
 
-    return [basefr, onsetfr, sustainedfr, offsetfr, stimArray, brainRegion, mouseID]
+    return [basefr, onsetfr, sustainedfr, offsetfr, stimArray, brainRegion, mouseID, sessionID]
 
 def calc_d_prime(array1: np.ndarray, array2: np.ndarray) -> np.float32:
     """
@@ -285,6 +286,65 @@ def calc_d_prime(array1: np.ndarray, array2: np.ndarray) -> np.float32:
                                    np.mean(np.sqrt(np.square(array2 - mean2[:, np.newaxis])), axis=1)))  # Creates an array of shape nNeurons for each input, then averages them to single value
     dprime = np.mean(np.sqrt(np.square(mean1 - mean2))) / mean_inner_distance
     return dprime
+
+def calc_fisher_criterion_Christian(array1: np.ndarray, array2: np.ndarray) -> (np.float32, np.ndarray):
+    """
+    Defined as
+
+    J(w) = (m_1 - m_2)^2 / (s_1^2 + s_2^2)
+
+    where
+    m_1 = np.mean(x_1 @ w), which is mean along projection w,
+    s_1 = np.var(x_1 @ w), which is the scatter along projection w,
+    and x_1 is first data set/array.
+
+    For higher dimensions, it can be instead defined as:
+
+    J(w) = (w^T * s_B * w) / (w^T * s_W * w)
+
+    where
+    s_B = between-class scatter matrix
+    s_W = within-class scatter matrix
+
+    Returns J(w) and w
+
+    Args:
+        array1: Array of shape (nCells, nTrials) where each row is a different cell and each column is a different trial.
+        array2: Array of shape (nCells, nTrials) where each row is a different cell and each column is a different trial.
+        array2 should be a different stimulus type than array1, otherwise result will be zero
+
+    Returns:
+
+    """
+    m1 = np.mean(array1, axis=1).reshape(-1, 1)
+    m2 = np.mean(array2, axis=1).reshape(-1, 1)
+
+    # Compute within-class
+    s1 = np.cov(array1, rowvar=True)
+    s2 = np.cov(array2, rowvar=True)
+    s_W = s1 + s2
+
+    # Compute between-class
+    mean_diff = (m2 - m1)#.reshape(-1, 1)  # Was adding in new column to make (n_neurons, 1)
+    s_B = np.dot(mean_diff, mean_diff.T)
+
+    # Solve generalized eigenvalue problem for w
+    # Equivalent to maximizing J(w) = w^T s_B w / w^T s_W w, which should be same as what is defined above
+    # eigvals, eigvecs = np.linalg.eig(np.linalg.pinv(s_W) @ mean_diff)
+
+    # w = eigvecs[:, np.argmax(eigvals)]  # Grab the eigenvec corresponding with the largest eigenval
+    w = np.dot(np.linalg.pinv(s_W, rcond=1E-6, hermitian=True), mean_diff)  # W Shape (nCells)
+
+    # Compute Fisher's criterion value as it should be defined in the docstring
+    # J = (w.T @ s_B @ w) / (w.T @ s_W @ w)
+    if w.sum() == 0:
+        J = 0
+    else:
+        w = w / np.linalg.norm(w)  # Normalzie to unit vector!
+        J = (np.dot(np.dot(w.T, s_B), w)) / ((np.dot(np.dot(w.T, s_W), w)))
+        J = J[0, 0]  # Extract it from the matrix that is shape 1,1
+
+    return J, w
 
 def calc_fisher_criterion(array1: np.ndarray, array2: np.ndarray) -> (np.float32, np.ndarray):
     """
@@ -315,25 +375,109 @@ def calc_fisher_criterion(array1: np.ndarray, array2: np.ndarray) -> (np.float32
     Returns:
 
     """
-    m1 = np.mean(array1, axis=0)
-    m2 = np.mean(array2, axis=0)
+    # TODO: Concat arrays to be n_neurons x 2*nTrials, do PCA on concat version (19, 20), keep # of PCs = # 2*nTrials - 1, Divide
+    #  PC array to get (19, 10)
+    concat_array = np.concatenate((array1, array2), axis=1).T
+    pcd = PCA()
+    pcd.fit(concat_array)
+
+    pc_array_data = pcd.transform(concat_array)
+    array1 = pc_array_data[:-1, :array1.shape[1]]
+    array2 = pc_array_data[:-1, array1.shape[1]:]
+
+    m1 = np.mean(array1, axis=1).reshape(-1, 1)
+    m2 = np.mean(array2, axis=1).reshape(-1, 1)
 
     # Compute within-class
-    s1 = np.cov(array1, rowvar=False)
-    s2 = np.cov(array2, rowvar=False)
+    s1 = np.cov(array1, rowvar=True)  # Do I need to make ddof=0? That would line up with the math on the website
+    s2 = np.cov(array2, rowvar=True)
+    # s1 = np.dot((array1 - m1), (array1 - m1).T)
+    # s2 = np.dot((array2 - m2), (array2 - m2).T)
     s_W = s1 + s2
 
     # Compute between-class
-    mean_diff = (m1 - m2).reshape(-1, 1)
-    s_B = mean_diff @ mean_diff.T
+    mean_diff = (m2 - m1)#.reshape(-1, 1)  # Was adding in new column to make (n_neurons, 1)
+    s_B = np.dot(mean_diff, mean_diff.T)
 
     # Solve generalized eigenvalue problem for w
     # Equivalent to maximizing J(w) = w^T s_B w / w^T s_W w, which should be same as what is defined above
-    eigvals, eigvecs = np.linalg.eig(np.linalg.pinv(s_W) @ s_B)
+    # eigvals, eigvecs = np.linalg.eig(np.linalg.pinv(s_W) @ mean_diff)
 
-    w = eigvecs[:, np.argmax(eigvals)]  # Grab the eigenvec corresponding with the largest eigenval
+    # w = eigvecs[:, np.argmax(eigvals)]  # Grab the eigenvec corresponding with the largest eigenval
+    w = np.dot(np.linalg.pinv(s_W), mean_diff)  # Not using pinv gives singular matrix error
+    # TODO: Normalize w to unit vector for the purposes of graphing later
 
     # Compute Fisher's criterion value as it should be defined in the docstring
-    J = (w.T @ s_B @ w) / (w.T @ s_W @ w)
+    # J = (w.T @ s_B @ w) / (w.T @ s_W @ w)
+    if w.sum() == 0:
+        J = 0
+    else:
+        w = w / np.linalg.norm(w)  # Normalzie to unit vector!
+        J = (np.dot(np.dot(w.T, s_B), w)) / ((np.dot(np.dot(w.T, s_W), w)))
 
-    return J.real, w.real
+    return J, w
+
+def plot_scatter_and_histogram(array1, array2, w, title="Scatter Plot with Projections and Histogram"):
+    """
+    Plot a scatterplot of two datasets along with their projections and a histogram of projections inlayed.
+
+    Args:
+        array1: Original data points for dataset 1 (shape: nCells x nTrials).
+        array2: Original data points for dataset 2 (shape: nCells x nTrials).
+        w: Projection vector defining the new axis.
+        title: Title for the plot.
+    """
+    # Reshape w to ensure compatibility
+    w = w.flatten()
+
+    # Project data onto the vector w
+    projections1 = np.dot(array1.T, w)  # shape (nCells)
+    projections2 = np.dot(array2.T, w)  # shape (nCells)
+
+    # Normalize w for visualization
+    w_normalized = w / np.linalg.norm(w)
+
+    # Prepare scatter plot canvas
+    fig, scatter_ax = plt.subplots(figsize=(10, 7))
+    scatter_ax.set_title(title)
+
+    # Scatter original data
+    scatter_ax.scatter(array1[0, :], array1[1, :], color='blue', alpha=0.5, label='Dataset 1')
+    scatter_ax.scatter(array2[0, :], array2[1, :], color='orange', alpha=0.5, label='Dataset 2')
+
+    # Scatter projections (scaled to line defined by w)
+    scatter_ax.scatter(projections1 * w_normalized[0], projections1 * w_normalized[1],
+                       color='darkblue', label='Projections (Dataset 1)')
+    scatter_ax.scatter(projections2 * w_normalized[0], projections2 * w_normalized[1],
+                       color='darkorange', label='Projections (Dataset 2)')
+
+    # Draw projection vectors (optional, for clarity)
+    for original, proj in zip(array1.T, projections1):
+        proj_point = proj * w_normalized
+        scatter_ax.plot([original[0], proj_point[0]], [original[1], proj_point[1]], color='blue', alpha=0.3, linestyle='--')
+    for original, proj in zip(array2.T, projections2):
+        proj_point = proj * w_normalized
+        scatter_ax.plot([original[0], proj_point[0]], [original[1], proj_point[1]], color='orange', alpha=0.3, linestyle='--')
+
+    # Add projection line (w) for reference
+    line_xs = np.array([-100, 100]) * w_normalized[0]
+    line_ys = np.array([-100, 100]) * w_normalized[1]
+    scatter_ax.plot(line_xs, line_ys, color='black', linestyle='--', label='Projection Axis (w)')
+
+    # Add labels and grid
+    scatter_ax.set_xlabel('Original Dimension 1')
+    scatter_ax.set_ylabel('Original Dimension 2')
+    scatter_ax.grid(alpha=0.3)
+    scatter_ax.legend(loc='upper left')
+
+    # Inlay histogram for projections
+    hist_ax = scatter_ax.inset_axes([0.65, 0.65, 0.3, 0.3])  # Position inset within main plot
+    hist_ax.hist(projections1, bins=20, color='blue', alpha=0.7, label='Dataset 1', density=True)
+    hist_ax.hist(projections2, bins=20, color='orange', alpha=0.7, label='Dataset 2', density=True)
+    hist_ax.xaxis.set_major_locator(MaxNLocator(integer=True))
+    hist_ax.set_title('Projection Histogram')
+    hist_ax.set_xlabel('Projections')
+    hist_ax.set_ylabel('Density')
+    # hist_ax.legend(fontsize=8, loc='best')
+
+    return fig

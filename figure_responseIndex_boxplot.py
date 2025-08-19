@@ -16,9 +16,9 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import plotly.colors as colors
 from importlib import reload
-import logging
-log = logging.getLogger('werkzeug')
-log.setLevel(logging.ERROR)
+# import logging
+# log = logging.getLogger('werkzeug')
+# log.setLevel(logging.ERROR)
 figdataPath = os.path.join(settings.FIGURES_DATA_PATH, studyparams.STUDY_NAME)
 
 dbPath = os.path.join(settings.DATABASE_PATH, studyparams.STUDY_NAME)

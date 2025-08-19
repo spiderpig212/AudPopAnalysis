@@ -35,7 +35,7 @@ if 1:
     fr_arrays_filename = os.path.join(figdataPath, f'fr_arrays_{stimType}.npz')
     print(f"Saving firing rate arrays to {fr_arrays_filename}")
     np.savez(fr_arrays_filename, basefr=fr_arrays[0], onsetfr=fr_arrays[1], sustainedfr=fr_arrays[2], offsetfr=fr_arrays[3],
-             stimArray=fr_arrays[4], brainRegionArray=fr_arrays[5], mouseIDArray=fr_arrays[6])
+             stimArray=fr_arrays[4], brainRegionArray=fr_arrays[5], mouseIDArray=fr_arrays[6], sessionIDArray=fr_arrays[7])
     print("Saved!")
 
 if 1:
@@ -49,7 +49,7 @@ if 1:
     fr_arrays_filename = os.path.join(figdataPath, f'fr_arrays_{stimType}.npz')
     print(f"Saving firing rate arrays to {fr_arrays_filename}")
     np.savez(fr_arrays_filename, basefr=fr_arrays[0], onsetfr=fr_arrays[1], sustainedfr=fr_arrays[2], offsetfr=fr_arrays[3],
-             stimArray=fr_arrays[4], brainRegionArray=fr_arrays[5], mouseIDArray=fr_arrays[6])
+             stimArray=fr_arrays[4], brainRegionArray=fr_arrays[5], mouseIDArray=fr_arrays[6], sessionIDArray=fr_arrays[7])
     print("Saved!")
 
 if 1:
@@ -63,5 +63,5 @@ if 1:
     fr_arrays_filename = os.path.join(figdataPath, f'fr_arrays_{stimType}.npz')
     print(f"Saving firing rate arrays to {fr_arrays_filename}")
     np.savez(fr_arrays_filename, basefr=fr_arrays[0], onsetfr=fr_arrays[1], sustainedfr=fr_arrays[2], offsetfr=fr_arrays[3],
-             stimArray=fr_arrays[4], brainRegionArray=fr_arrays[5], mouseIDArray=fr_arrays[6])
+             stimArray=fr_arrays[4], brainRegionArray=fr_arrays[5], mouseIDArray=fr_arrays[6], sessionIDArray=fr_arrays[7])
     print("Saved!")
