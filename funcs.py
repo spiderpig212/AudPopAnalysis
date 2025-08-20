@@ -233,8 +233,6 @@ def calculate_fr_arrays(celldb:pd.DataFrame, stimType:str, stimVar:str, timeRang
         if len(currentStim) == len(eventOnsetTimes) - 1:
             eventOnsetTimes = eventOnsetTimes[:len(currentStim)]
 
-        # TODO: Sort the stim array and responses before storing so they are all aligned already
-
         (spikeTimesFromEventOnset, trialIndexForEachSpike, indexLimitsEachTrial) = \
             spikesanalysis.eventlocked_spiketimes(spikeTimes, eventOnsetTimes, timeRange)
 
