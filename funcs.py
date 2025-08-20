@@ -233,6 +233,8 @@ def calculate_fr_arrays(celldb:pd.DataFrame, stimType:str, stimVar:str, timeRang
         if len(currentStim) == len(eventOnsetTimes) - 1:
             eventOnsetTimes = eventOnsetTimes[:len(currentStim)]
 
+        # TODO: Sort the stim array and responses before storing so they are all aligned already
+
         (spikeTimesFromEventOnset, trialIndexForEachSpike, indexLimitsEachTrial) = \
             spikesanalysis.eventlocked_spiketimes(spikeTimes, eventOnsetTimes, timeRange)
 
@@ -250,11 +252,19 @@ def calculate_fr_arrays(celldb:pd.DataFrame, stimType:str, stimVar:str, timeRang
         firingRateSustain = spikesEachTrialEachPeriod[2] / periodDuration[2]
         firingRateOffset = spikesEachTrialEachPeriod[3] / periodDuration[3]
 
-        basefr[indCell, :] = firingRateBase
-        onsetfr[indCell, :] = firingRateOnset
-        sustainedfr[indCell, :] = firingRateSustain
-        offsetfr[indCell, :] = firingRateOffset
-        stimArray[indCell, :] = currentStim
+        sorted_stim_ind = np.argsort(currentStim)
+        sorted_stim_array = currentStim[sorted_stim_ind]
+        sorted_fr_base = firingRateBase[sorted_stim_ind]
+        sorted_fr_onset = firingRateOnset[sorted_stim_ind]
+        sorted_fr_sustained = firingRateSustain[sorted_stim_ind]
+        sorted_fr_offset = firingRateOffset[sorted_stim_ind]
+
+
+        basefr[indCell, :] = sorted_fr_base
+        onsetfr[indCell, :] = sorted_fr_onset
+        sustainedfr[indCell, :] = sorted_fr_sustained
+        offsetfr[indCell, :] = sorted_fr_offset
+        stimArray[indCell, :] = sorted_stim_array
         brainRegion[indCell] = dbRow['simpleSiteName']
         mouseID[indCell] = dbRow['subject']
         sessionID[indCell] = dbRow['date']

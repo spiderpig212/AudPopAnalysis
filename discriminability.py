@@ -1,6 +1,7 @@
 import numpy as np
 import pandas as pd
 from scipy import stats
+from matplotlib import pyplot as plt
 import plotly.graph_objects as go
 import plotly.colors as pcolors
 import funcs
@@ -70,8 +71,10 @@ for i_stim, stim in enumerate(stim_types):
                     dprime_stim_vals[i1, i2] = J
                     proj_fig = funcs.plot_scatter_and_histogram(resp_mask, resp_mask2, w)
                     # proj_fig.legend(loc='best')
-                    # proj_fig.write_html(f"{file_path}/fisher_criterion_plots/FCriterion_{brainRegion}_{stimType}_{stimType2}_{respRange}.html")
-                    proj_fig.show()
+                    proj_fig.savefig(f"{file_path}/fisher_projections/FCriterion_{brainRegion}_{stimType}_{stimType2}_{respRange}.png")
+                    # proj_fig.show()
+                    plt.close(proj_fig)
+
 
             upper_indices = np.triu_indices(dprime_stim_vals.shape[0], k=1)
             upper_tri_values = dprime_stim_vals[upper_indices]
@@ -131,7 +134,7 @@ for respRange in response_ranges:
                 stat, p_value = stats.ranksums(data1, data2)
 
                 # Determine significance label
-                significance_label = '*' if p_value < 0.05 else 'ns'
+                significance_label = '*' if p_value < 0.05/len(regions) else 'ns'
 
                 # Calculate position for the bracket
                 max_y = max(max(data1), max(data2))
@@ -230,7 +233,7 @@ for area in uniqRegions:
                 stat, p_value = stats.ranksums(data1, data2)
 
                 # Determine significance label
-                significance_label = '*' if p_value < 0.05 else 'ns'
+                significance_label = '*' if p_value < 0.05/len(respRanges) else 'ns'
 
                 # Calculate position for the bracket
                 max_y = max(max(data1), max(data2))

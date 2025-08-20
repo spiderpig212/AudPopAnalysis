@@ -1,6 +1,7 @@
 import os
 import numpy as np
 from sklearn.decomposition import PCA
+from scipy import stats
 
 import funcs
 from jaratoolbox import celldatabase
@@ -102,7 +103,7 @@ for stim in stim_types:
                 transformed_act_offset[(area, session)].append(transformed_activity)
 
 #%% Plotting skree plots with participation ratios
-for stim in stim_types:
+for stim_ind, stim in enumerate(stim_types):
     fig_skree = make_subplots(
         rows=3,
         cols=3,
@@ -120,24 +121,59 @@ for stim in stim_types:
         vertical_spacing=0.08  # Adjust spacing between rows
     )
 
+    fig_PR = make_subplots(
+        rows=3,
+        cols=1,
+        specs=[
+            [{"colspan": 1}],
+            [{"colspan": 1}],
+            [{"colspan": 1}],
+        ],
+        subplot_titles=[
+            f"Dorsal",
+            f"Primary",
+            f"Ventral",
+        ],
+        vertical_spacing=0.18  # Adjust spacing between rows
+    )
+
     fig_skree.update_layout(
         title=f"{stim} Stimulus - Skree Plot {neuron_threshold} Neurons",
     )
+
+    dorsal_x = []
+    dorsal_points = []
+    dorsal_means = []
+    dorsal_stats = []
+    primary_x = []
+    primary_points = []
+    primary_means = []
+    primary_stats = []
+    ventral_x = []
+    ventral_points = []
+    ventral_means = []
+    ventral_stats = []
 
     for respRange in response_ranges:
         plot_col = response_map[respRange]
         if respRange == "onset":
             explained_vars = explained_vars_onset
+            pr_color = "blue"
+            pr_point = 0
         elif respRange == "sustained":
             explained_vars = explained_vars_sustained
+            pr_color = "black"
+            pr_point = 1
         elif respRange == "offset":
             explained_vars = explained_vars_offset
+            pr_color = "orange"
+            pr_point = 2
         dorsal_data = []
         primary_data = []
         ventral_data = []
 
         for area, session in session_list.index:
-            sesh_vars = explained_vars[(area, session)][plot_col - 1]
+            sesh_vars = explained_vars[(area, session)][stim_ind]
             if area == "Dorsal auditory area":
                 dorsal_data.append(sesh_vars)
             elif area == "Primary auditory area":
@@ -165,6 +201,16 @@ for stim in stim_types:
         primary_pr_sem = primary_pr_array.std() / np.sqrt(primary_pr_array.shape[0])
         ventral_pr_sem = ventral_pr_array.std() / np.sqrt(ventral_pr_array.shape[0])
 
+        dorsal_x.append(np.repeat(pr_point, len(dorsal_pr_array)))
+        dorsal_points.append(dorsal_pr_array)
+        dorsal_means.append(dorsal_pr_mean)
+        primary_x.append(np.repeat(pr_point, len(primary_pr_array)))
+        primary_points.append(primary_pr_array)
+        primary_means.append(primary_pr_mean)
+        ventral_x.append(np.repeat(pr_point, len(ventral_pr_array)))
+        ventral_points.append(ventral_pr_array)
+        ventral_means.append(ventral_pr_mean)
+
         fig_skree.add_trace(go.Scatter(
             x=np.arange(0, 12, 1),  # Plotting first 12 PCs
             y=dorsal_mean,
@@ -178,9 +224,9 @@ for stim in stim_types:
 
         fig_skree.add_annotation(
             text=f" PR = {dorsal_pr_mean:.2f} +/- {dorsal_pr_sem:.2f}",  # Text for the annotation
-            #row=1, col=plot_col,
-            xref=f"x{plot_col}",  # Handle multiple subplots for x-axis
-            yref=f"y{1}",  # Handle multiple subplots for y-axis
+            row=1, col=plot_col,
+            # xref=f"x{plot_col}",  # Handle multiple subplots for x-axis
+            # yref=f"y{1}",  # Handle multiple subplots for y-axis
             x=0.95,  # Position (relative, 0 is left, 1 is right)
             y=0.95,  # Position (relative, 0 is bottom, 1 is top)
             #xanchor="right",  # Anchors text to the right
@@ -193,12 +239,25 @@ for stim in stim_types:
             x=np.arange(0, 12, 1),  # Plotting first 12 PCs
             y=primary_mean,
             error_y=dict(type='data', array=primary_sem, visible=True),
-            name=f"Primary, PR = {primary_pr_mean:.2f} +/- {primary_pr_sem:.2f}",
+            name=f"Primary",
             legendgroup="Primary",
             marker_color="black",
             mode="lines+markers",
                 ),
             row=2, col=plot_col)
+
+        fig_skree.add_annotation(
+            text=f" PR = {primary_pr_mean:.2f} +/- {primary_pr_sem:.2f}",  # Text for the annotation
+            row=2, col=plot_col,
+            # xref=f"x{plot_col}",  # Handle multiple subplots for x-axis
+            # yref=f"y{2}",  # Handle multiple subplots for y-axis
+            x=0.95,  # Position (relative, 0 is left, 1 is right)
+            y=0.95,  # Position (relative, 0 is bottom, 1 is top)
+            # xanchor="right",  # Anchors text to the right
+            # yanchor="top",  # Anchors text to the top
+            font=dict(size=12, color="black"),  # Customize font size and color
+            showarrow=False  # Hide the arrow
+        )
 
         fig_skree.add_trace(go.Scatter(
             x=np.arange(0, 12, 1),  # Plotting first 12 PCs
@@ -209,9 +268,253 @@ for stim in stim_types:
             marker_color="orange",
             mode="lines+markers",
                 ),
-            row=3, col=plot_col)
+            row=3, col=plot_col,)
+
+        fig_skree.add_annotation(
+            text=f" PR = {ventral_pr_mean:.2f} +/- {ventral_pr_sem:.2f}",  # Text for the annotation
+            row=3, col=plot_col,
+            # xref=f"x{plot_col}",  # Handle multiple subplots for x-axis
+            # yref=f"y{3}",  # Handle multiple subplots for y-axis
+            x=0.95,  # Position (relative, 0 is left, 1 is right)
+            y=0.95,  # Position (relative, 0 is bottom, 1 is top)
+            # xanchor="right",  # Anchors text to the right
+            # yanchor="top",  # Anchors text to the top
+            font=dict(size=12, color="black"),  # Customize font size and color
+            showarrow=False  # Hide the arrow
+        )
 
         fig_skree.update_layout(showlegend=False)
+
+    y_offset = 2  # Initial offset for the brackets
+    p_threshold = 0.05/len(response_ranges)  # Bonferonni correction
+    for i in range(len(response_ranges)):
+        dorsal_stat1 = dorsal_points[i]
+        primary_stat1 = primary_points[i]
+        ventral_stat1 = ventral_points[i]
+        for j in range(1, len(response_ranges)):
+            dorsal_stat2 = dorsal_points[j]
+            primary_stat2 = primary_points[j]
+            ventral_stat2 = ventral_points[j]
+            if i != j and j > i:
+                bracket_y = 20 + y_offset
+                dorsal_pval = stats.mannwhitneyu(dorsal_stat1, dorsal_stat2, alternative='two-sided').pvalue
+                primary_pval = stats.mannwhitneyu(primary_stat1, primary_stat2, alternative='two-sided').pvalue
+                ventral_pval = stats.mannwhitneyu(ventral_stat1, ventral_stat2, alternative='two-sided').pvalue
+                dorsal_stats.append(dorsal_pval)
+                primary_stats.append(primary_pval)
+                ventral_stats.append(ventral_pval)
+
+                sig_label_primary = '*' if primary_pval < p_threshold else 'ns'
+                sig_label_dorsal = '*' if dorsal_pval < p_threshold else 'ns'
+                sig_label_ventral = '*' if ventral_pval < p_threshold else 'ns'
+
+                fig_PR.add_shape(
+                    type="line",
+                    x0=i,  # Start near one box
+                    x1=j,  # End near the other box
+                    y0=bracket_y,
+                    y1=bracket_y,
+                    xref=f"x{1}",  # column
+                    yref=f"y{1}",  # row
+                    line=dict(color="black", width=1),
+                )
+                fig_PR.add_shape(
+                    type="line",
+                    x0=i,
+                    x1=i,  # Vertical tick for the first group
+                    y0=bracket_y,
+                    y1=bracket_y - 1,
+                    xref=f"x{1}",
+                    yref=f"y{1}",
+                    line=dict(color="black", width=1),
+                )
+                fig_PR.add_shape(
+                    type="line",
+                    x0=j,
+                    x1=j,  # Vertical tick for the second group
+                    y0=bracket_y,
+                    y1=bracket_y - 1,
+                    xref=f"x{1}",
+                    yref=f"y{1}",
+                    line=dict(color="black", width=1),
+                )
+
+                # Add text label (* or ns) above the bracket
+                fig_PR.add_annotation(
+                    x=(i + j) / 2,  # Midpoint of the bracket
+                    y=bracket_y + 0.1,  # Slightly above the bracket
+                    text=sig_label_dorsal,
+                    showarrow=False,
+                    font=dict(size=12, color="black"),
+                    xref=f"x{1}",
+                    yref=f"y{1}",
+                )
+
+                fig_PR.add_shape(
+                    type="line",
+                    x0=i,  # Start near one box
+                    x1=j,  # End near the other box
+                    y0=bracket_y,
+                    y1=bracket_y,
+                    xref=f"x{1}",  # column
+                    yref=f"y{2}",  # row
+                    line=dict(color="black", width=1),
+                )
+                fig_PR.add_shape(
+                    type="line",
+                    x0=i,
+                    x1=i,  # Vertical tick for the first group
+                    y0=bracket_y,
+                    y1=bracket_y - 1,
+                    xref=f"x{1}",
+                    yref=f"y{2}",
+                    line=dict(color="black", width=1),
+                )
+                fig_PR.add_shape(
+                    type="line",
+                    x0=j,
+                    x1=j,  # Vertical tick for the second group
+                    y0=bracket_y,
+                    y1=bracket_y - 1,
+                    xref=f"x{1}",
+                    yref=f"y{2}",
+                    line=dict(color="black", width=1),
+                )
+
+                # Add text label (* or ns) above the bracket
+                fig_PR.add_annotation(
+                    x=(i + j) / 2,  # Midpoint of the bracket
+                    y=bracket_y + 0.1,  # Slightly above the bracket
+                    text=sig_label_primary,
+                    showarrow=False,
+                    font=dict(size=12, color="black"),
+                    xref=f"x{1}",
+                    yref=f"y{2}",
+                )
+
+                fig_PR.add_shape(
+                    type="line",
+                    x0=i,  # Start near one box
+                    x1=j,  # End near the other box
+                    y0=bracket_y,
+                    y1=bracket_y,
+                    xref=f"x{1}",  # column
+                    yref=f"y{3}",  # row
+                    line=dict(color="black", width=1),
+                )
+                fig_PR.add_shape(
+                    type="line",
+                    x0=i,
+                    x1=i,  # Vertical tick for the first group
+                    y0=bracket_y,
+                    y1=bracket_y - 1,
+                    xref=f"x{1}",
+                    yref=f"y{3}",
+                    line=dict(color="black", width=1),
+                )
+                fig_PR.add_shape(
+                    type="line",
+                    x0=j,
+                    x1=j,  # Vertical tick for the second group
+                    y0=bracket_y,
+                    y1=bracket_y - 1,
+                    xref=f"x{1}",
+                    yref=f"y{3}",
+                    line=dict(color="black", width=1),
+                )
+
+                # Add text label (* or ns) above the bracket
+                fig_PR.add_annotation(
+                    x=(i + j) / 2,  # Midpoint of the bracket
+                    y=bracket_y + 0.1,  # Slightly above the bracket
+                    text=sig_label_ventral,
+                    showarrow=False,
+                    font=dict(size=12, color="black"),
+                    xref=f"x{1}",
+                    yref=f"y{3}",
+                )
+                y_offset += 2  # Increment the offset for the next bracket to avoid overlap
+
+
+
+    dorsal_x = np.concatenate(dorsal_x)
+    dorsal_points = np.concatenate(dorsal_points)
+    primary_x = np.concatenate(primary_x)
+    primary_points = np.concatenate(primary_points)
+    ventral_x = np.concatenate(ventral_x)
+    ventral_points = np.concatenate(ventral_points)
+
+    fig_PR.add_trace(go.Scatter(
+        x=dorsal_x,
+        y=dorsal_points,
+        name=f"{respRange} PR",
+        legendgroup=f"{respRange} PR",
+        marker_color=pr_color,
+        mode="markers",
+        opacity=0.5,
+    ), row=1, col=1, )
+
+    fig_PR.add_trace(go.Scatter(
+        x=np.arange(0, 3, 1),
+        y=dorsal_means,
+        name=f"{respRange} PR - Mean",
+        legendgroup=f"{respRange} PR",
+        mode="lines+markers",
+        marker_color=pr_color,
+    ), row=1, col=1, )
+
+    fig_PR.add_trace(go.Scatter(
+        x=primary_x,
+        y=primary_points,
+        name=f"{respRange} PR",
+        legendgroup=f"{respRange} PR",
+        marker_color=pr_color,
+        mode="markers",
+        opacity=0.5,
+        showlegend=False,
+    ), row=2, col=1, )
+
+    fig_PR.add_trace(go.Scatter(
+        x=np.arange(0, 3, 1),
+        y=primary_means,
+        name=f"{respRange} PR",
+        legendgroup=f"{respRange} PR",
+        mode="lines+markers",
+        marker_color=pr_color,
+        showlegend=False,
+    ), row=2, col=1, )
+
+    fig_PR.add_trace(go.Scatter(
+        x=ventral_x,
+        y=ventral_points,
+        name=f"{respRange} PR",
+        legendgroup=f"{respRange} PR",
+        marker_color=pr_color,
+        mode="markers",
+        opacity=0.5,
+        showlegend=False,
+    ), row=3, col=1, )
+
+    fig_PR.add_trace(go.Scatter(
+        x=np.arange(0, 3, 1),
+        y=ventral_means,
+        name=f"{respRange} PR",
+        legendgroup=f"{respRange} PR",
+        mode="lines+markers",
+        marker_color=pr_color,
+        showlegend=False,
+    ), row=3, col=1, )
+
+    fig_PR.update_xaxes(title_text="Response", range=[-0.2, 2.2],
+                        tickmode='array',
+                        tickvals=[0, 1, 2],
+                        ticktext=response_ranges,
+                        )
+    fig_PR.update_yaxes(title_text="Participation Ratio", range=[0, 30])
+    fig_PR.update_layout(title=f"{stim} Stimulus - Participation Ratio,  {neuron_threshold} Neurons",
+                         showlegend=False,)
+
+    fig_PR.write_html(f"{figdataPath}/PCA_and_PR_plots/PR_{stim}.html")
     fig_skree.write_html(f"{figdataPath}/PCA_and_PR_plots/skree_{stim}.html")
 
 
