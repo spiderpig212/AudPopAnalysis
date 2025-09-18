@@ -73,17 +73,17 @@ for stim in stim_types:
     mouseIDArray = stim_arrays["mouseIDArray"]
     sessionArray = stim_arrays["sessionIDArray"]
     stimArray = stim_arrays["stimArray"][0, :]
-    sorted_stim_ind = np.argsort(stimArray)
-    sorted_stim_array = stimArray[sorted_stim_ind]
+    # sorted_stim_ind = np.argsort(stimArray)  # No longer needed as trials are sorted before being stored
+    # sorted_stim_array = stimArray[sorted_stim_ind]
 
     for respRange in response_ranges:
         respArray = stim_arrays[f"{respRange}fr"]
-        sortedRespArray = respArray[:, sorted_stim_ind]
+        # sortedRespArray = respArray[:, sorted_stim_ind]
         for area, session in session_list.index:
             area_ind = np.where(brainRegionArray == area)[0]
             session_ind = np.where(sessionArray == session)[0]
             target_data_ind = np.intersect1d(area_ind, session_ind)
-            target_data = sortedRespArray[target_data_ind, :]
+            target_data = respArray[target_data_ind, :]
             mean_zero_target_data = target_data - target_data.mean(axis=1, keepdims=True)
             random_indices = np.random.choice(mean_zero_target_data.shape[0], size=neuron_threshold, replace=False)
             mean_zero_target_data = mean_zero_target_data[random_indices]
@@ -553,7 +553,7 @@ scatter_plot = go.Scatter(
                 y=transformed_activity[:, 1],  # Second principal component
                 mode='markers',  # Use markers for a scatter plot
                 marker=dict(size=5,
-                            color=sorted_stim_array,
+                            color=stimArray,
                             colorscale='Viridis',
                             opacity=0.7,
                             colorbar=dict(title="Stim Vals")),  # Marker size, color, and transparency

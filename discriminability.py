@@ -14,6 +14,8 @@ file_path = settings.FIGURES_DATA_PATH + "/" + studyparams.STUDY_NAME
 response_ranges = ["onset", "sustained", "offset"]
 stim_types = ["naturalSound", "AM", "pureTones"]
 
+projection_plots = False
+
 boxplot_data = {}
 
 colors = {
@@ -69,11 +71,12 @@ for i_stim, stim in enumerate(stim_types):
                     # dprime = funcs.calc_d_prime(resp_mask, resp_mask2)
                     J, w = funcs.calc_fisher_criterion_Christian(resp_mask, resp_mask2)
                     dprime_stim_vals[i1, i2] = J
-                    proj_fig = funcs.plot_scatter_and_histogram(resp_mask, resp_mask2, w)
-                    # proj_fig.legend(loc='best')
-                    proj_fig.savefig(f"{file_path}/fisher_projections/FCriterion_{brainRegion}_{stimType}_{stimType2}_{respRange}.png")
-                    # proj_fig.show()
-                    plt.close(proj_fig)
+                    if projection_plots:
+                        proj_fig = funcs.plot_scatter_and_histogram(resp_mask, resp_mask2, w)
+                        # proj_fig.legend(loc='best')
+                        proj_fig.savefig(f"{file_path}/fisher_projections/FCriterion_{brainRegion}_{stimType}_{stimType2}_{respRange}.png")
+                        # proj_fig.show()
+                        plt.close(proj_fig)
 
 
             upper_indices = np.triu_indices(dprime_stim_vals.shape[0], k=1)
