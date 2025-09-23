@@ -7,6 +7,10 @@ import os
 import sys
 import numpy as np
 from scipy import stats
+from scipy.stats import kruskal
+from scipy.stats import mannwhitneyu
+from statsmodels.stats.multitest import multipletests
+import itertools
 from sklearn.cross_decomposition import CCA
 from tqdm import tqdm
 import matplotlib.pyplot as plt
@@ -15,6 +19,7 @@ import pandas as pd
 
 import studyparams
 from jaratoolbox import settings, celldatabase
+from funcs import add_significance_stars, add_statistical_brackets
 
 #%% Data import
 file_path = settings.FIGURES_DATA_PATH + "/" + studyparams.STUDY_NAME
@@ -51,6 +56,7 @@ for i_stim, stim in enumerate(stim_types):
     uniqStims = np.unique(stimArray)
     uniqRegions = np.unique(brainRegionArray)
     uniqSessions = np.unique(sessionArray)
+    correlation_data = []
 
     for respRange in response_ranges:
         respArray = stim_arrays[f"{respRange}fr"]
@@ -86,6 +92,17 @@ for i_stim, stim in enumerate(stim_types):
                     response_transform = cca.fit_transform(brain_resp_array, brain2_resp_array)
 
                     correlation_val = np.corrcoef(response_transform[0][:, 0], response_transform[1][:, 0])[0, 1]
+
+                    correlation_data.append({
+                        'region_pair': f"{brainRegion}_vs_{brainRegion2}",
+                        'region1': brainRegion,
+                        'region2': brainRegion2,
+                        'correlation': correlation_val,
+                        'response_range': respRange,
+                        'stimulus': stim,
+                        'session': session
+                    })
+
                     plt.scatter(response_transform[0][:, 0], response_transform[1][:, 0])
                     plt.xlabel(f'{brainRegion}_canonical_dimension_0')
                     plt.ylabel(f'{brainRegion2}_canonical_dimension_0')
@@ -123,7 +140,213 @@ for i_stim, stim in enumerate(stim_types):
                     plt.savefig(f"{file_path}/CCA_plots/{brainRegion}_{brainRegion2}_{respRange}_{stim}_{session}_original_space2.png")
                     plt.show()
 
+    df_correlations = pd.DataFrame(correlation_data)
+    df_correlations.to_feather(f"{file_path}/CCA_correlations_{stim}.feather")
+    df_correlations.to_csv(f"{file_path}/CCA_correlations_{stim}.csv", index=False)
 
+    # Stats comparisons with a Kruskal-Wallis test (ANOVA but non-parametric)
+    groups = [group['correlation'].values for name, group in df_correlations.groupby('region_pair')]
+    kruskal_stat, kruskal_p = kruskal(*groups)
+    print(f"Kruskal-Wallis test: H = {kruskal_stat:.4f}, p = {kruskal_p:.4f}")
 
+    if kruskal_p < 0.05:
+        print("Significant differences found between region pairs")
+    else:
+        print("No significant differences found between region pairs")
+
+    region_pairs = df_correlations['region_pair'].unique()
+
+    # Perform all pairwise comparisons
+    pairwise_results = []
+    for pair1, pair2 in itertools.combinations(region_pairs, 2):
+        group1 = df_correlations[df_correlations['region_pair'] == pair1]['correlation']
+        group2 = df_correlations[df_correlations['region_pair'] == pair2]['correlation']
+
+        stat, p_val = mannwhitneyu(group1, group2, alternative='two-sided')
+        pairwise_results.append({
+            'comparison': f"{pair1} vs {pair2}",
+            'statistic': stat,
+            'p_value': p_val,
+            'group1_median': group1.median(),
+            'group2_median': group2.median()
+        })
+    pairwise_df = pd.DataFrame(pairwise_results)
+
+    # Apply multiple comparisons correction (Benjamini-Hochberg)
+    # _, corrected_p, _, _ = multipletests(pairwise_df['p_value'], method='fdr_bh')
+    _, corrected_p, _, _ = multipletests(pairwise_df['p_value'], method='bonferroni')
+    pairwise_df['corrected_p'] = corrected_p
+    pairwise_df['significant'] = corrected_p < 0.05
+
+    significant_pairs = pairwise_df[pairwise_df['significant']]
+    print(f"\nSignificant pairwise comparisons (corrected p < 0.05):")
+    print(significant_pairs[['comparison', 'group1_median', 'group2_median', 'corrected_p']])
+    pairwise_df.to_feather(f"{file_path}/CCA_pairwise_correlations_{stim}.feather")
+    pairwise_df.to_csv(f"{file_path}/CCA_pairwise_correlations_{stim}.csv")
+
+    plt.figure(figsize=(12, 8))
+    ax = sns.boxplot(data=df_correlations, x='region_pair', y='correlation')
+    plt.xticks(rotation=45, ha='right')
+    add_significance_stars(ax, df_correlations, 'region_pair', 'correlation')
+    plt.title(f'CCA Correlations by Brain Region Pair - {stim}')
+    plt.ylabel('Canonical Correlation')
+    plt.tight_layout()
+    plt.savefig(f"{file_path}/CCA_summary_plots/CCA_correlations_boxplot_{stim}.png", dpi=300, bbox_inches='tight')
+    plt.show()
+
+    if len(response_ranges) > 1:  # Create a boxplot of the various response ranges. No stats for these yet
+        plt.figure(figsize=(15, 8))
+        sns.boxplot(data=df_correlations, x='region_pair', y='correlation', hue='response_range')
+        plt.xticks(rotation=45, ha='right')
+        plt.title(f'CCA Correlations by Brain Region Pair and Response Range - {stim}')
+        plt.ylabel('Canonical Correlation')
+        plt.legend(title='Response Range')
+        plt.tight_layout()
+        plt.savefig(f"{file_path}/CCA_summary_plots/CCA_correlations_by_response_range_{stim}.png", dpi=300, bbox_inches='tight')
+        plt.show()
+
+    # Create individual plots for each response range with statistical comparisons
+    if len(response_ranges) > 1:
+        # Create output directory for individual response range plots
+        individual_plots_dir = f"{file_path}/CCA_individual_response_plots"
+        os.makedirs(individual_plots_dir, exist_ok=True)
+
+        print(f"\n=== Statistical Analysis by Response Range for {stim} ===")
+
+        for respRange in response_ranges:
+            print(f"\n--- {respRange.title()} Response Range ---")
+
+            # Filter data for this response range
+            range_data = df_correlations[df_correlations['response_range'] == respRange]
+
+            if len(range_data) == 0:
+                print(f"No data found for {respRange} response range")
+                continue
+
+            # Overall Kruskal-Wallis test
+            groups = [group['correlation'].values for name, group in range_data.groupby('region_pair')]
+            group_names = [name for name, group in range_data.groupby('region_pair')]
+
+            if len(groups) < 2:
+                print(f"Not enough groups for statistical comparison in {respRange}")
+                continue
+
+            kruskal_stat, kruskal_p = kruskal(*groups)
+            print(f"Kruskal-Wallis test: H = {kruskal_stat:.4f}, p = {kruskal_p:.4f}")
+
+            if kruskal_p < 0.05:
+                print("Significant differences found between region pairs")
+            else:
+                print("No significant differences found between region pairs")
+
+            # Create the boxplot
+            plt.figure(figsize=(14, 10))
+            ax = sns.boxplot(data=range_data, x='region_pair', y='correlation')
+            plt.xticks(rotation=45, ha='right')
+
+            # Add statistical brackets if overall test is significant
+            if kruskal_p < 0.05:
+                statistical_results = add_statistical_brackets(ax, range_data, 'region_pair', 'correlation')
+
+                # Print significant pairwise comparisons
+                significant_pairs = [r for r in statistical_results if r['significant']]
+                if significant_pairs:
+                    print(f"Significant pairwise comparisons (FDR corrected p < 0.05):")
+                    for result in significant_pairs:
+                        effect_size = abs(result['median1'] - result['median2'])
+                        print(f"  {result['group1_name']} vs {result['group2_name']}: "
+                              f"p = {result['corrected_p']:.4f}, "
+                              f"medians: {result['median1']:.3f} vs {result['median2']:.3f}, "
+                              f"effect size: {effect_size:.3f}")
+                else:
+                    print("No significant pairwise comparisons after FDR correction")
+
+            plt.title(f'CCA Correlations - {respRange.title()} Response Range - {stim}\n'
+                      f'Kruskal-Wallis: H = {kruskal_stat:.3f}, p = {kruskal_p:.4f}')
+            plt.ylabel('Canonical Correlation')
+            plt.tight_layout()
+
+            # Save the plot
+            plt.savefig(f"{individual_plots_dir}/CCA_correlations_{respRange}_{stim}.png",
+                        dpi=300, bbox_inches='tight')
+            plt.show()
+
+            # Create a summary statistics table for this response range
+            summary_stats = range_data.groupby('region_pair')['correlation'].agg([
+                'count', 'mean', 'median', 'std', 'min', 'max'
+            ]).round(4)
+
+            print(f"\nSummary statistics for {respRange} response range:")
+            print(summary_stats)
+
+            # Save summary statistics
+            summary_stats.to_csv(f"{individual_plots_dir}/summary_stats_{respRange}_{stim}.csv")
+
+    # Additional analysis: Compare response ranges for each region pair
+    print(f"\n=== Comparing Response Ranges Within Region Pairs for {stim} ===")
+
+    response_range_comparison_dir = f"{file_path}/CCA_response_range_comparisons"
+    os.makedirs(response_range_comparison_dir, exist_ok=True)
+
+    # Get unique region pairs
+    unique_region_pairs = df_correlations['region_pair'].unique()
+
+    for region_pair in unique_region_pairs:
+        print(f"\n--- {region_pair} ---")
+
+        # Filter data for this region pair
+        pair_data = df_correlations[df_correlations['region_pair'] == region_pair]
+
+        # Check if we have data for multiple response ranges
+        available_ranges = pair_data['response_range'].unique()
+        if len(available_ranges) < 2:
+            print(f"Only one response range available for {region_pair}")
+            continue
+
+        # Kruskal-Wallis test across response ranges
+        range_groups = [group['correlation'].values for name, group in pair_data.groupby('response_range')]
+        kruskal_stat, kruskal_p = kruskal(*range_groups)
+        print(f"Kruskal-Wallis test across response ranges: H = {kruskal_stat:.4f}, p = {kruskal_p:.4f}")
+
+        # Create boxplot comparing response ranges for this region pair
+        plt.figure(figsize=(10, 8))
+        ax = sns.boxplot(data=pair_data, x='response_range', y='correlation')
+
+        # Add statistical brackets if significant
+        if kruskal_p < 0.05:
+            statistical_results = add_statistical_brackets(ax, pair_data, 'response_range', 'correlation')
+
+            # Print significant comparisons
+            significant_pairs = [r for r in statistical_results if r['significant']]
+            if significant_pairs:
+                print(f"Significant response range comparisons (FDR corrected p < 0.05):")
+                for result in significant_pairs:
+                    effect_size = abs(result['median1'] - result['median2'])
+                    print(f"  {result['group1_name']} vs {result['group2_name']}: "
+                          f"p = {result['corrected_p']:.4f}, "
+                          f"medians: {result['median1']:.3f} vs {result['median2']:.3f}")
+
+        plt.title(f'CCA Correlations Across Response Ranges\n{region_pair} - {stim}\n'
+                  f'Kruskal-Wallis: H = {kruskal_stat:.3f}, p = {kruskal_p:.4f}')
+        plt.ylabel('Canonical Correlation')
+        plt.xlabel('Response Range')
+        plt.tight_layout()
+
+        # Save the plot
+        safe_region_pair = region_pair.replace('/', '_').replace(' ', '_')
+        plt.savefig(f"{response_range_comparison_dir}/response_ranges_{safe_region_pair}_{stim}.png",
+                    dpi=300, bbox_inches='tight')
+        plt.show()
+
+        # Summary statistics for this region pair across response ranges
+        pair_summary = pair_data.groupby('response_range')['correlation'].agg([
+            'count', 'mean', 'median', 'std', 'min', 'max'
+        ]).round(4)
+
+        print(f"Summary statistics for {region_pair}:")
+        print(pair_summary)
+
+        # Save summary
+        pair_summary.to_csv(f"{response_range_comparison_dir}/summary_{safe_region_pair}_{stim}.csv")
 
 

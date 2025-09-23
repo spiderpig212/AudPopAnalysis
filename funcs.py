@@ -2,6 +2,10 @@ import os
 from numpy import ndarray
 import plotly.colors as colors
 from sklearn.decomposition import PCA
+from scipy.stats import kruskal
+from scipy.stats import mannwhitneyu
+from statsmodels.stats.multitest import multipletests
+import itertools
 
 from jaratoolbox import settings
 from jaratoolbox import extraplots
@@ -14,6 +18,7 @@ import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.ticker import MaxNLocator
+import seaborn as sns
 import plotly
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
@@ -489,3 +494,141 @@ def plot_scatter_and_histogram(array1, array2, w, title="Scatter Plot with Proje
     # hist_ax.legend(fontsize=8, loc='best')
 
     return fig
+
+
+def add_significance_stars(ax, df, x_col, y_col, pairs_to_test=None):
+    """Add significance stars above boxplot pairs"""
+
+    # Get unique groups
+    groups = df[x_col].unique()
+
+    # If no specific pairs provided, test all combinations
+    if pairs_to_test is None:
+        pairs_to_test = list(itertools.combinations(range(len(groups)), 2))
+
+    # Perform pairwise tests
+    p_values = []
+    for i, j in pairs_to_test:
+        group1 = df[df[x_col] == groups[i]][y_col]
+        group2 = df[df[x_col] == groups[j]][y_col]
+        _, p = mannwhitneyu(group1, group2, alternative='two-sided')
+        p_values.append(p)
+
+    # Correct for multiple comparisons
+    # _, corrected_p, _, _ = multipletests(p_values, method='fdr_bh')
+    _, corrected_p, _, _ = multipletests(p_values, method='bonferroni')
+
+    # Add significance annotations
+    y_max = df[y_col].max()
+    y_range = df[y_col].max() - df[y_col].min()
+
+    for idx, (i, j) in enumerate(pairs_to_test):
+        if corrected_p[idx] < 0.001:
+            sig_text = '***'
+        elif corrected_p[idx] < 0.01:
+            sig_text = '**'
+        elif corrected_p[idx] < 0.05:
+            sig_text = '*'
+        else:
+            continue  # Skip non-significant comparisons
+
+        # Calculate bracket height
+        bracket_height = y_max + y_range * (0.05 + 0.05 * idx)
+
+        # Draw bracket
+        ax.plot([i, j], [bracket_height, bracket_height], 'k-', linewidth=1)
+        ax.plot([i, i], [bracket_height, bracket_height - y_range * 0.01], 'k-', linewidth=1)
+        ax.plot([j, j], [bracket_height, bracket_height - y_range * 0.01], 'k-', linewidth=1)
+
+        # Add significance text
+        ax.text((i + j) / 2, bracket_height + y_range * 0.01, sig_text,
+                ha='center', va='bottom', fontsize=12, fontweight='bold')
+
+
+def add_statistical_brackets(ax, df, x_col, y_col, test_pairs=None):
+    """Add statistical comparison brackets to boxplot"""
+
+    groups = df[x_col].unique()
+    n_groups = len(groups)
+
+    if test_pairs is None:
+        test_pairs = list(itertools.combinations(range(n_groups), 2))
+
+    # Perform statistical tests
+    results = []
+    for i, j in test_pairs:
+        group1 = df[df[x_col] == groups[i]][y_col]
+        group2 = df[df[x_col] == groups[j]][y_col]
+
+        stat, p_val = mannwhitneyu(group1, group2, alternative='two-sided')
+        results.append({
+            'group1_idx': i,
+            'group2_idx': j,
+            'group1_name': groups[i],
+            'group2_name': groups[j],
+            'p_value': p_val,
+            'median1': group1.median(),
+            'median2': group2.median()
+        })
+
+    # Correct for multiple comparisons
+    p_values = [r['p_value'] for r in results]
+    # _, corrected_p, _, _ = multipletests(p_values, method='fdr_bh')
+    _, corrected_p, _, _ = multipletests(p_values, method='bonferroni')
+
+
+    # Add corrected p-values to results
+    for i, result in enumerate(results):
+        result['corrected_p'] = corrected_p[i]
+        result['significant'] = corrected_p[i] < 0.05
+
+    # Draw brackets for significant comparisons
+    y_max = df[y_col].max()
+    y_min = df[y_col].min()
+    y_range = y_max - y_min
+
+    # Sort by distance between groups to avoid overlapping brackets
+    significant_results = [r for r in results if r['significant']]
+    significant_results.sort(key=lambda x: abs(x['group1_idx'] - x['group2_idx']))
+
+    bracket_heights = {}
+    base_height = y_max + y_range * 0.05
+
+    for result in significant_results:
+        i, j = result['group1_idx'], result['group2_idx']
+        p_val = result['corrected_p']
+
+        # Determine significance level
+        if p_val < 0.001:
+            sig_text = '***'
+        elif p_val < 0.01:
+            sig_text = '**'
+        else:
+            sig_text = '*'
+
+        # Calculate bracket height to avoid overlaps
+        max_height_in_range = base_height
+        for existing_i, existing_j in bracket_heights.keys():
+            if (min(i, j) <= max(existing_i, existing_j) and
+                    max(i, j) >= min(existing_i, existing_j)):
+                max_height_in_range = max(max_height_in_range,
+                                          bracket_heights[(existing_i, existing_j)] + y_range * 0.08)
+
+        bracket_height = max_height_in_range
+        bracket_heights[(i, j)] = bracket_height
+
+        # Draw the bracket
+        ax.plot([i, j], [bracket_height, bracket_height], 'k-', linewidth=1.5)
+        ax.plot([i, i], [bracket_height, bracket_height - y_range * 0.02], 'k-', linewidth=1.5)
+        ax.plot([j, j], [bracket_height, bracket_height - y_range * 0.02], 'k-', linewidth=1.5)
+
+        # Add significance text
+        ax.text((i + j) / 2, bracket_height + y_range * 0.02, sig_text,
+                ha='center', va='bottom', fontsize=12, fontweight='bold')
+
+    # Adjust plot limits to accommodate brackets
+    if bracket_heights:
+        max_bracket = max(bracket_heights.values()) + y_range * 0.1
+        ax.set_ylim(y_min - y_range * 0.05, max_bracket)
+
+    return results
