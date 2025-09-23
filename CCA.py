@@ -30,7 +30,6 @@ areas_of_interest = [
     "Primary auditory area",
     "Ventral auditory area"
     ]
-# TODO: Need to make sure I am not doing duplicate comparisons between brain regions
 
 for i_stim, stim in enumerate(stim_types):
 
@@ -67,7 +66,7 @@ for i_stim, stim in enumerate(stim_types):
             session_resp_array = respArray[session_mask, :]
             brain_session_array = brainRegionArray[session_mask]
 
-            for brainRegion in uniqRegions:
+            for i, brainRegion in enumerate(uniqRegions):
                 brainRegion_mask = brain_session_array == brainRegion
                 brain_resp_array = session_resp_array[brainRegion_mask, :].T  # Make the array (nTrials, nNeurons)
                 region1_sess_count = brain_resp_array.shape[1]
@@ -75,9 +74,7 @@ for i_stim, stim in enumerate(stim_types):
                     print(f"Skipping region 1: {brainRegion} because it has fewer than {neuron_threshold} neurons (n = {region1_sess_count}), session {session}")
                     continue
 
-                for brainRegion2 in uniqRegions:
-                    if brainRegion == brainRegion2:
-                        continue
+                for brainRegion2 in uniqRegions[i+1:]:
                     brainRegion2_mask = brain_session_array == brainRegion2
                     brain2_resp_array = session_resp_array[brainRegion2_mask, :].T  # Make the array (nTrials, nNeurons)
                     region2_sess_count = brain2_resp_array.shape[1]
