@@ -25,12 +25,6 @@ stim_types = ["pureTones"]  # For now only start with pure tones to try and unde
 neuron_threshold = 20
 figdataPath = os.path.join(settings.FIGURES_DATA_PATH, studyparams.STUDY_NAME)
 
-areas_of_interest = [
-    "Dorsal auditory area",
-    "Primary auditory area",
-    "Ventral auditory area"
-    ]
-
 for i_stim, stim in enumerate(stim_types):
 
     if stim == 'AM':
@@ -73,6 +67,9 @@ for i_stim, stim in enumerate(stim_types):
                 if region1_sess_count < neuron_threshold:
                     print(f"Skipping region 1: {brainRegion} because it has fewer than {neuron_threshold} neurons (n = {region1_sess_count}), session {session}")
                     continue
+                # Grab a random 20 neurons from the array
+                region1_neurons = np.random.choice(brain_resp_array.shape[1], size=20, replace=False)
+                brain_resp_array = brain_resp_array[:, region1_neurons]
 
                 for brainRegion2 in uniqRegions[i+1:]:
                     brainRegion2_mask = brain_session_array == brainRegion2
@@ -81,8 +78,10 @@ for i_stim, stim in enumerate(stim_types):
                     if region2_sess_count < neuron_threshold:
                         print(f"Skipping region 2: {brainRegion2} because it has fewer than {neuron_threshold} neurons (n = {region2_sess_count}), session {session}")
                         continue
+                    region2_neurons = np.random.choice(brain2_resp_array.shape[1], size=20, replace=False)
+                    brain2_resp_array = brain2_resp_array[:, region2_neurons]
 
-                    n_components = np.min([brain_resp_array.shape[1], brain2_resp_array.shape[1]])  # Whichever region has fewer neurons
+                    n_components = np.min([brain_resp_array.shape[1], brain2_resp_array.shape[1]])  # Whichever region has fewer neurons (should always be equal to neuron threshold now)
                     cca = CCA(n_components=n_components)
                     response_transform = cca.fit_transform(brain_resp_array, brain2_resp_array)
 
