@@ -632,3 +632,12 @@ def add_statistical_brackets(ax, df, x_col, y_col, test_pairs=None):
         ax.set_ylim(y_min - y_range * 0.05, max_bracket)
 
     return results
+
+def participation_ratio(array):
+    """
+    Calculate participation ratio which is the sum squared divided by the sum of the squares
+    """
+
+    numerator = np.sum(array)**2
+    denominator = np.sum(array**2)
+    return numerator / denominator
