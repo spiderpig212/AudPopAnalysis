@@ -99,7 +99,7 @@ for i_stim, stim in enumerate(stim_types):
                         all_corr_vals.append(np.corrcoef(response_transform[0][:, cca_component], response_transform[1][:, cca_component])[0, 1])
                     corr_array = np.array(all_corr_vals)
                     partic_ratio = participation_ratio(corr_array)
-                    mean_corr_val = np.mean(corr_array[:np.ceil(partic_ratio)])  # Doing the ceiling because the last value is not inclusive so this will grab lowest whole number less than PR value
+                    mean_corr_val = np.mean(corr_array[:int(np.ceil(partic_ratio))])  # Doing the ceiling because the last value is not inclusive so this will grab lowest whole number less than PR value
 
                     correlation_data.append({
                         'region_pair': f"{brainRegion}_vs_{brainRegion2}",
@@ -210,7 +210,7 @@ for i_stim, stim in enumerate(stim_types):
             plt.figure(figsize=(15, 8))
             sns.boxplot(data=df_correlations, x='region_pair', y=f'{analysis_type}', hue='response_range')
             plt.xticks(rotation=45, ha='right')
-            plt.title(f'CCA Correlations by Brain Region Pair and Response Range - {stim}')
+            plt.title(f'CCA {analysis_type} by Brain Region Pair and Response Range - {stim}')
             plt.ylabel('Canonical Correlation')
             plt.legend(title='Response Range')
             plt.tight_layout()
@@ -273,7 +273,7 @@ for i_stim, stim in enumerate(stim_types):
                     else:
                         print("No significant pairwise comparisons after FDR correction")
 
-                plt.title(f'CCA Correlations - {respRange.title()} Response Range - {stim}\n'
+                plt.title(f'CCA {analysis_type} - {respRange.title()} Response Range - {stim}\n'
                           f'Kruskal-Wallis: H = {kruskal_stat:.3f}, p = {kruskal_p:.4f}')
                 plt.ylabel('Canonical Correlation')
                 plt.tight_layout()

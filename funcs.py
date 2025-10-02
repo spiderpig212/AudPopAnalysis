@@ -638,6 +638,6 @@ def participation_ratio(array):
     Calculate participation ratio which is the sum squared divided by the sum of the squares
     """
 
-    numerator = np.sum(array)**2
-    denominator = np.sum(array**2)
+    numerator = np.nansum(array)**2
+    denominator = np.nansum(array**2)
     return numerator / denominator
