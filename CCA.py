@@ -24,7 +24,7 @@ from funcs import add_significance_stars, add_statistical_brackets, participatio
 #%% Data import
 file_path = settings.FIGURES_DATA_PATH + "/" + studyparams.STUDY_NAME
 response_ranges = ["onset", "sustained", "offset"]
-stim_types = ["pureTones"]  # For now only start with pure tones to try and understand analysis meaning
+stim_types = ["pureTones", "AM", "naturalSound"]  # For now only start with pure tones to try and understand analysis meaning
 analysis_attempts = ["correlation", "mean_corr", "PR"]
 # stim_types = ["naturalSound", "AM", "pureTones"]
 
