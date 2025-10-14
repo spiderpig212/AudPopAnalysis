@@ -17,39 +17,34 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 import pandas as pd
 
+from analysis_class import AnalysisBase, FiringRateAnalysis
 import studyparams
 from jaratoolbox import settings, celldatabase
 from funcs import add_significance_stars, add_statistical_brackets, participation_ratio
 
 #%% Data import
-file_path = settings.FIGURES_DATA_PATH + "/" + studyparams.STUDY_NAME
 response_ranges = ["onset", "sustained", "offset"]
 stim_types = ["pureTones", "AM", "naturalSound"]  # For now only start with pure tones to try and understand analysis meaning
 analysis_attempts = ["correlation", "mean_corr", "PR"]
 # stim_types = ["naturalSound", "AM", "pureTones"]
 
 neuron_threshold = 20
-figdataPath = os.path.join(settings.FIGURES_DATA_PATH, studyparams.STUDY_NAME)
+fr_db = FiringRateAnalysis(db_suffix="coords_updated")
+file_path = fr_db.figdata_path
+stim_types = fr_db.stim_types
 
 for i_stim, stim in enumerate(stim_types):
 
-    if stim == 'AM':
-        nTrials = 220
-        nCategories = 11
-    elif stim == 'naturalSound':
-        nTrials = 200
-        nCategories = len(studyparams.SOUND_CATEGORIES)
-        soundCats = studyparams.SOUND_CATEGORIES
-        nInstances = 4
-        stimVals = np.empty(nInstances*nCategories, dtype=object)
-        for i in range(nCategories):
-            for j in range(nInstances):
-                stimVals[i*nInstances+j] = soundCats[i] + f"_{j+1}"
-    elif stim == 'pureTones':
-        nTrials = 320
-        nCategories = 16
+    stim_info = fr_db.stim_info[stim]
+    nTrials = stim_info['nTrials']
+    nCategories = stim_info['nCategories']
+    if stim == 'naturalSound':
+        soundCats = stim_info['soundCats']
+        nInstances = stim_info['nInstances']
+        stimVals = stim_info['stimVals']
 
-    stim_arrays = np.load(f"{file_path}/fr_arrays_{stim}.npz", allow_pickle=True)
+    stim_info = fr_db.stim_info[stim]
+    stim_arrays = fr_db.return_arrays(stim)
     brainRegionArray = stim_arrays["brainRegionArray"]
     mouseIDArray = stim_arrays["mouseIDArray"]
     sessionArray = stim_arrays["sessionIDArray"]
