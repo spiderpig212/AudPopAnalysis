@@ -123,7 +123,7 @@ for i_stim, stim in enumerate(stim_types):
                     br1_fr = brain_resp_array[:, :2]
                     br1_weights = cca.x_weights_[:, 0]
                     br2_fr = brain2_resp_array[:, :2]
-                    br2_weights = cca.x_weights_[:, 1]
+                    br2_weights = cca.y_weights_[:, 0]
 
                     # Making scatters
                     plt.scatter(br1_fr[:, 0], br1_fr[:, 1], c=stimArray, cmap='viridis', alpha=0.3, s=2)

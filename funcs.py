@@ -641,3 +641,209 @@ def participation_ratio(array):
     numerator = np.nansum(array)**2
     denominator = np.nansum(array**2)
     return numerator / denominator
+
+def subspace_overlap_analysis(cov_mat1, cov_mat2):
+    """
+    Computes the subspace overlap analysis, modified from the paper 
+    "Reorganization between preparatory and movement population responses in motor cortex"
+     by Elsayed et al. 2016 in nature comms
+    Here we define the covariance as
+    """
+
+    numerator = np.trace(np.sqrt(cov_mat1 @ cov_mat2))
+    denominator = np.sqrt(np.trace(cov_mat1) * np.trace(cov_mat2))
+    d = 1 - (numerator/denominator)
+    return d
+
+def SSA_Elsayed(data_a, cov_mat_b, sigma_b, num_comp=10):
+    """
+    Computes the SSA score for Elsayed et al. 2016
+    """
+    numerator = np.trace(data_a.T @ cov_mat_b @ data_a)
+    denominator = np.sum(sigma_b[:num_comp])
+    A = numerator / denominator
+    return A
+
+
+import matplotlib.pyplot as plt
+from matplotlib.patches import Ellipse
+import numpy as np
+from scipy.stats import chi2
+
+
+def plot_subspace_ellipses(response_data, u_ab, u_ac, n_components=2, confidence_level=0.95,
+                           title="Subspace Overlap Visualization"):
+    """
+    Plot ellipses representing subspaces defined by CCA components overlaid on neural data.
+
+    Parameters:
+    -----------
+    response_data : array-like, shape (n_trials, n_neurons)
+        Neural response data
+    u_ab : array-like, shape (n_features, n_components)
+        CCA components for first subspace
+    u_ac : array-like, shape (n_features, n_components)
+        CCA components for second subspace
+    n_components : int, default=2
+        Number of components to use for visualization (2 for 2D plot)
+    confidence_level : float, default=0.95
+        Confidence level for the ellipses
+    """
+
+    # Project data onto the first two components of each subspace
+    proj_ab = response_data @ u_ab[:, :n_components]  # Shape: (n_trials, n_components)
+    proj_ac = response_data @ u_ac[:, :n_components]  # Shape: (n_trials, n_components)
+
+    # Create figure
+    fig, axes = plt.subplots(1, 3, figsize=(18, 6))
+
+    # Plot 1: Data projected onto u_ab subspace
+    axes[0].scatter(proj_ab[:, 0], proj_ab[:, 1], alpha=0.6, s=20, c='blue', label='Data')
+    ellipse_ab = create_confidence_ellipse(proj_ab, confidence_level, color='blue', alpha=0.3)
+    axes[0].add_patch(ellipse_ab)
+    axes[0].set_xlabel('u_ab Component 1')
+    axes[0].set_ylabel('u_ab Component 2')
+    axes[0].set_title('Data in u_ab Subspace')
+    axes[0].grid(True, alpha=0.3)
+    axes[0].legend()
+
+    # Plot 2: Data projected onto u_ac subspace
+    axes[1].scatter(proj_ac[:, 0], proj_ac[:, 1], alpha=0.6, s=20, c='red', label='Data')
+    ellipse_ac = create_confidence_ellipse(proj_ac, confidence_level, color='red', alpha=0.3)
+    axes[1].add_patch(ellipse_ac)
+    axes[1].set_xlabel('u_ac Component 1')
+    axes[1].set_ylabel('u_ac Component 2')
+    axes[1].set_title('Data in u_ac Subspace')
+    axes[1].grid(True, alpha=0.3)
+    axes[1].legend()
+
+    # Plot 3: Overlay both projections to compare subspaces
+    axes[2].scatter(proj_ab[:, 0], proj_ab[:, 1], alpha=0.4, s=20, c='blue', label='u_ab projection')
+    axes[2].scatter(proj_ac[:, 0], proj_ac[:, 1], alpha=0.4, s=20, c='red', label='u_ac projection')
+
+    # Add ellipses
+    ellipse_ab_overlay = create_confidence_ellipse(proj_ab, confidence_level, color='blue', alpha=0.2)
+    ellipse_ac_overlay = create_confidence_ellipse(proj_ac, confidence_level, color='red', alpha=0.2)
+    axes[2].add_patch(ellipse_ab_overlay)
+    axes[2].add_patch(ellipse_ac_overlay)
+
+    axes[2].set_xlabel('Component 1')
+    axes[2].set_ylabel('Component 2')
+    axes[2].set_title('Subspace Overlap Comparison')
+    axes[2].grid(True, alpha=0.3)
+    axes[2].legend()
+
+    plt.suptitle(title, fontsize=16)
+    plt.tight_layout()
+    return fig, axes
+
+
+def create_confidence_ellipse(data, confidence_level=0.95, color='blue', alpha=0.3):
+    """
+    Create a confidence ellipse for 2D data.
+
+    Parameters:
+    -----------
+    data : array-like, shape (n_samples, 2)
+        2D data points
+    confidence_level : float
+        Confidence level for the ellipse
+    """
+    if data.shape[1] != 2:
+        raise ValueError("Data must be 2D for ellipse visualization")
+
+    # Calculate covariance matrix and mean
+    cov = np.cov(data.T)
+    mean = np.mean(data, axis=0)
+
+    # Get eigenvalues and eigenvectors
+    eigenvals, eigenvecs = np.linalg.eigh(cov)
+
+    # Calculate ellipse parameters
+    chi2_val = chi2.ppf(confidence_level, df=2)
+    width, height = 2 * np.sqrt(chi2_val * eigenvals)
+    angle = np.degrees(np.arctan2(eigenvecs[1, 0], eigenvecs[0, 0]))
+
+    # Create ellipse
+    ellipse = Ellipse(xy=mean, width=width, height=height, angle=angle,
+                      facecolor=color, alpha=alpha, edgecolor=color, linewidth=2)
+
+    return ellipse
+
+
+def plot_subspace_directions_on_data(response_data, u_ab, u_ac, n_dims_to_show=2):
+    """
+    Plot the original neural data in the first 2 dimensions and overlay
+    the subspace directions as vectors.
+
+    Parameters:
+    -----------
+    response_data : array-like, shape (n_trials, n_neurons)
+        Neural response data
+    u_ab : array-like, shape (n_features, n_components)
+        CCA components for first subspace
+    u_ac : array-like, shape (n_features, n_components)
+        CCA components for second subspace
+    n_dims_to_show : int
+        Number of original dimensions to show (default 2 for 2D plot)
+    """
+
+    fig, ax = plt.subplots(1, 1, figsize=(10, 8))
+
+    # Plot the data in the first two original dimensions
+    ax.scatter(response_data[:, 0], response_data[:, 1], alpha=0.5, s=30, c='gray', label='Neural Data')
+
+    # Plot subspace directions as vectors
+    origin = np.mean(response_data[:, :n_dims_to_show], axis=0)
+
+    # Scale factors for visualization (adjust as needed)
+    scale = np.std(response_data[:, :n_dims_to_show]) * 2
+
+    # Plot first few components of each subspace
+    colors_ab = ['blue', 'lightblue', 'navy']
+    colors_ac = ['red', 'lightcoral', 'darkred']
+
+    for i in range(min(3, u_ab.shape[1])):  # Show up to 3 components
+        if i < n_dims_to_show:
+            direction_ab = u_ab[:n_dims_to_show, i] * scale
+            direction_ac = u_ac[:n_dims_to_show, i] * scale
+
+            ax.arrow(origin[0], origin[1], direction_ab[0], direction_ab[1],
+                     head_width=scale * 0.1, head_length=scale * 0.1, fc=colors_ab[i],
+                     ec=colors_ab[i], label=f'u_ab Component {i + 1}', linewidth=3)
+
+            ax.arrow(origin[0], origin[1], direction_ac[0], direction_ac[1],
+                     head_width=scale * 0.1, head_length=scale * 0.1, fc=colors_ac[i],
+                     ec=colors_ac[i], label=f'u_ac Component {i + 1}', linewidth=3)
+
+    ax.set_xlabel('Neuron 1 Activity')
+    ax.set_ylabel('Neuron 2 Activity')
+    ax.set_title('Subspace Directions Overlaid on Neural Data')
+    ax.legend()
+    ax.grid(True, alpha=0.3)
+
+    return fig, ax
+
+
+# Example usage with your existing code:
+# Add this to your analysis loop where you have u_ab, u_ac, response_data, and d
+
+def visualize_subspace_overlap(response_data, u_ab, u_ac, d, region_info, save_path=None):
+    """
+    Complete visualization of subspace overlap analysis.
+    """
+
+    # Create the main ellipse plot
+    fig1, axes1 = plot_subspace_ellipses(response_data, u_ab, u_ac,
+                                         title=f"Subspace Overlap: {region_info}\nOverlap Metric d = {d:.3f}")
+
+    # Create the direction vectors plot
+    fig2, ax2 = plot_subspace_directions_on_data(response_data, u_ab, u_ac)
+    ax2.set_title(f"Subspace Directions: {region_info}\nOverlap Metric d = {d:.3f}")
+
+    if save_path:
+        fig1.savefig(f"{save_path}_ellipses.png", dpi=300, bbox_inches='tight')
+        fig2.savefig(f"{save_path}_directions.png", dpi=300, bbox_inches='tight')
+
+    plt.show()
+    return fig1, fig2
