@@ -1,9 +1,8 @@
 import os
 from numpy import ndarray
-import plotly.colors as colors
 from sklearn.decomposition import PCA
-from scipy.stats import kruskal
-from scipy.stats import mannwhitneyu
+from scipy.stats import mannwhitneyu, kruskal
+from scipy.linalg import sqrtm
 from statsmodels.stats.multitest import multipletests
 import itertools
 
@@ -21,6 +20,7 @@ from matplotlib.ticker import MaxNLocator
 import seaborn as sns
 import plotly
 import plotly.graph_objects as go
+import plotly.colors as colors
 from plotly.subplots import make_subplots
 from tqdm import tqdm
 
@@ -650,10 +650,15 @@ def subspace_overlap_analysis(cov_mat1, cov_mat2):
     Here we define the covariance as
     """
 
-    numerator = np.trace(np.sqrt(cov_mat1 @ cov_mat2))
+    numerator = np.trace(sqrtm(cov_mat1 @ cov_mat2,))
     denominator = np.sqrt(np.trace(cov_mat1) * np.trace(cov_mat2))
     d = 1 - (numerator/denominator)
-    return d
+    # Try-except for dealing with the fact we could get complex values if numerically there is an eigenvalue on the
+    # negative real axis. Values are small, so it seems to be a precision error (+-1e10-11j)
+    try:
+        return d.real
+    except TypeError:
+        return d
 
 def SSA_Elsayed(data_a, cov_mat_b, sigma_b, num_comp=10):
     """

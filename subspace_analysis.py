@@ -14,12 +14,13 @@ from analysis_class import FiringRateAnalysis
 from sklearn.cross_decomposition import CCA
 import funcs as funcs
 
+ # TODO: Mean subtract data for analysis
+neuron_threshold = 20
 response_ranges = ["onset", "sustained", "offset"]
 stim_types = ["pureTones", "AM", "naturalSound"]  # For now only start with pure tones to try and understand analysis meaning
 analysis_attempts = ["correlation", "mean_corr", "PR"]
 # stim_types = ["naturalSound", "AM", "pureTones"]
 
-neuron_threshold = 20
 fr_db = FiringRateAnalysis(db_suffix="coords_updated")
 file_path = fr_db.figdata_path
 stim_types = fr_db.stim_types
@@ -52,47 +53,64 @@ for i_stim, stim in enumerate(stim_types):
         respArray = stim_arrays[f"{respRange}fr"]
 
         for session in uniqSessions:
+            # TODO: Initialize neuron threshold here to be 20, then have it go through all areas in a given session above threshold and calulate a
+            #  new minimum threshold based off the highest count from the smallest region to use for CCA calculations for this session. Add a value
+            #  in the dataframe for what the neuron threshold was for a given calculation so we can track given we can no longer assume n = 20 for all\
             session_mask = sessionArray == session
             session_resp_array = respArray[session_mask, :]
             brain_session_array = brainRegionArray[session_mask]
-
+            min_threshold = 100000
             for i, brainRegion in enumerate(uniqRegions):
                 brainRegion_mask = brain_session_array == brainRegion
+                resp_array = session_resp_array[brainRegion_mask, :].T  # Make the array (nTrials, nNeurons)
+                region_sess_count = resp_array.shape[1]
+                if region_sess_count < min_threshold and region_sess_count >= neuron_threshold:
+                    min_threshold = region_sess_count
+            for i, brainRegion in enumerate(uniqRegions):
+
+                brainRegion_mask = brain_session_array == brainRegion
                 brain_resp_array = session_resp_array[brainRegion_mask, :].T  # Make the array (nTrials, nNeurons)
+                brain_resp_array = brain_resp_array - brain_resp_array.mean()
                 region1_sess_count = brain_resp_array.shape[1]
                 if region1_sess_count < neuron_threshold:
                     print(
                         f"Skipping region 1: {brainRegion} because it has fewer than {neuron_threshold} neurons (n = {region1_sess_count}), session {session}")
                     continue
-                # Grab a random neuron_threshold neurons from the array
-                region1_neurons = np.random.choice(brain_resp_array.shape[1], size=neuron_threshold, replace=False)
+                # Grab a random min_threshold neurons from the array so we can sample as many as possible
+                region1_neurons = np.random.choice(brain_resp_array.shape[1], size=min_threshold, replace=False)
                 brain_resp_array = brain_resp_array[:, region1_neurons]
 
                 for brainRegion2 in uniqRegions[i + 1:]:
                     brainRegion2_mask = brain_session_array == brainRegion2
                     brain2_resp_array = session_resp_array[brainRegion2_mask, :].T  # Make the array (nTrials, nNeurons)
+                    brain2_resp_array = brain2_resp_array - brain2_resp_array.mean()
                     region2_sess_count = brain2_resp_array.shape[1]
                     if region2_sess_count < neuron_threshold:
                         print(
                             f"Skipping region 2: {brainRegion2} because it has fewer than {neuron_threshold} neurons (n = {region2_sess_count}), session {session}")
                         continue
-                    region2_neurons = np.random.choice(brain2_resp_array.shape[1], size=neuron_threshold, replace=False)
+                    region2_neurons = np.random.choice(brain2_resp_array.shape[1], size=min_threshold, replace=False)
                     brain2_resp_array = brain2_resp_array[:, region2_neurons]
 
                     n_components = np.min([brain_resp_array.shape[1], brain2_resp_array.shape[
-                        1]])  # Whichever region has fewer neurons (should always be equal to neuron threshold now)
+                        1]]) - 1  # Whichever region has fewer neurons (should always be equal to min threshold now). Subtract one component as the final dimension is 0's
                     cca = CCA(n_components=n_components)
                     response_transform = cca.fit_transform(brain_resp_array, brain2_resp_array)
 
                     all_corr_vals = []
-                    for cca_component in range(neuron_threshold):
-                        all_corr_vals.append(np.corrcoef(response_transform[0][:, cca_component], response_transform[1][:, cca_component])[0, 1])
-                    corr_array = np.array(all_corr_vals)
+                    for cca_component in range(n_components):
+                        corr_val = np.corrcoef(response_transform[0][:, cca_component], response_transform[1][:, cca_component])[0, 1]
+                        if np.sum(np.isnan(corr_val)) > 0:
+                            print(f"NaN found in correlation calculation for {brainRegion} vs {brainRegion2} in session {session}")
+                            corr_val = 0
+                        all_corr_vals.append(corr_val)
+                    corr_array = np.array(all_corr_vals)**2
 
                     br1_weights = cca.x_weights_  # Shape is (n_features n_components) from documentation, is the left singular vectors of the CC matrices of each iteration (u^A->B in our written notation)
                     br2_weights = cca.y_weights_  # Shape is (n_targets, n_components) from documentation, ^ but for the right singular vectors (u^B->A in our written notation)
 
-                    cca_cov_mat = np.einsum('ji,j,ki->jk',br1_weights, corr_array, br1_weights)  # Should be the same as br1_weights @ np.diag(corr_array) @ br1_weights.T
+                    # TODO: Verify that the einsum and the math that is commented on the right results in the same result
+                    cca_cov_mat = np.einsum('ij,j,jk->ik',br1_weights, corr_array, br1_weights.T)  # Should be the same as br1_weights @ np.diag(corr_array) @ br1_weights.T, shape (min_neuron, min_neuron) as we sum over components
                     ssa_analysis.append({
                         'region_pair': f"{brainRegion}_vs_{brainRegion2}",
                         'region1': brainRegion,
@@ -107,6 +125,7 @@ for i_stim, stim in enumerate(stim_types):
                         'cca_cov_mat': cca_cov_mat,
                         'session': session,
                         'stimulus': stim,
+                        'n_neurons': min_threshold,
                         'response_range': respRange,
                     })
 
@@ -135,6 +154,7 @@ for stim in stim_types:
                         regions_to_compare += region_pair
                         cca_cov_mats.append(row.cca_cov_mat)
                         response_data = row.region1_resp_array
+                        n_neurons = row.n_neurons
                         brain_region_A_weights.append(row.br1_weights)
                     regions_to_compare.pop(2)
                     subspace_comp_brain_region_string = f"{regions_to_compare[0]} vs {regions_to_compare[1]} and {regions_to_compare[2]}"
@@ -150,6 +170,7 @@ for stim in stim_types:
                         'regionA': regions_to_compare[0],
                         'regionB': regions_to_compare[1],
                         'regionC': regions_to_compare[2],
+                        'n_neurons': n_neurons,
                         'SSA_overlap': d,
                         'session': session,
                         'stimulus': stim,
