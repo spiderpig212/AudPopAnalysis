@@ -14,7 +14,6 @@ from analysis_class import FiringRateAnalysis
 from sklearn.cross_decomposition import CCA
 import funcs as funcs
 
- # TODO: Mean subtract data for analysis
 neuron_threshold = 20
 response_ranges = ["onset", "sustained", "offset"]
 stim_types = ["pureTones", "AM", "naturalSound"]  # For now only start with pure tones to try and understand analysis meaning
@@ -53,9 +52,6 @@ for i_stim, stim in enumerate(stim_types):
         respArray = stim_arrays[f"{respRange}fr"]
 
         for session in uniqSessions:
-            # TODO: Initialize neuron threshold here to be 20, then have it go through all areas in a given session above threshold and calulate a
-            #  new minimum threshold based off the highest count from the smallest region to use for CCA calculations for this session. Add a value
-            #  in the dataframe for what the neuron threshold was for a given calculation so we can track given we can no longer assume n = 20 for all\
             session_mask = sessionArray == session
             session_resp_array = respArray[session_mask, :]
             brain_session_array = brainRegionArray[session_mask]
@@ -108,8 +104,25 @@ for i_stim, stim in enumerate(stim_types):
 
                     br1_weights = cca.x_weights_  # Shape is (n_features n_components) from documentation, is the left singular vectors of the CC matrices of each iteration (u^A->B in our written notation)
                     br2_weights = cca.y_weights_  # Shape is (n_targets, n_components) from documentation, ^ but for the right singular vectors (u^B->A in our written notation)
+                    print(f"X dot of first two components is: {np.dot(cca.x_weights_[0, 0], cca.x_weights_[0, 1])}")
+                    print(f"Y dot of first two components is: {np.dot(cca.y_weights_[0, 0], cca.y_weights_[0, 1])}")
 
-                    # TODO: Verify that the einsum and the math that is commented on the right results in the same result
+                    # Plotting the CCA dimensions in PC space
+                    pca1, pca2, pc_data1, pc_data2, cca_weights_pc1, cca_weights_pc2 = funcs.plot_pca_with_cca_weights(
+                        brain_resp_array, brain2_resp_array, br1_weights, br2_weights,
+                        stimArray, brainRegion, brainRegion2, n_pc_components=10,
+                        save_path=f"{file_path}/subspace_overlap_analysis/PCA_CCA_plots/{brainRegion}_{brainRegion2}_{respRange}_{stim}_{session}"
+                    )
+
+                    print(f"PC1 dot of first two components is: {np.dot(cca_weights_pc1[0, 0], cca_weights_pc1[0, 1])}")
+                    print(f"PC2 dot of first two components is: {np.dot(cca_weights_pc2[0, 0], cca_weights_pc2[0, 1])}")
+
+                    # Comparing CCA weights/angles
+                    # funcs.plot_cca_weights_comparison(pc_data1, pc_data2, cca_weights_pc1, cca_weights_pc2,
+                    #                             brainRegion, brainRegion2,
+                    #                             save_path=f"{file_path}/subspace_overlap_analysis/PCA_CCA_plots/{brainRegion}_{brainRegion2}_{respRange}_{stim}_{session}")
+
+
                     cca_cov_mat = np.einsum('ij,j,jk->ik',br1_weights, corr_array, br1_weights.T)  # Should be the same as br1_weights @ np.diag(corr_array) @ br1_weights.T, shape (min_neuron, min_neuron) as we sum over components
                     ssa_analysis.append({
                         'region_pair': f"{brainRegion}_vs_{brainRegion2}",

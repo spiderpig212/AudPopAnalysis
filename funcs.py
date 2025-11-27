@@ -852,3 +852,223 @@ def visualize_subspace_overlap(response_data, u_ab, u_ac, d, region_info, save_p
 
     plt.show()
     return fig1, fig2
+
+def plot_pca_with_cca_weights(brain_resp_array, brain2_resp_array, br1_weights, br2_weights,
+                              stimArray, brainRegion, brainRegion2, n_pc_components=2, save_path=None):
+    """
+    Transform neural data into PC space and overlay CCA weight vectors.
+
+    Parameters:
+    -----------
+    brain_resp_array : array-like, shape (n_trials, n_neurons)
+        Neural response data for region 1
+    brain2_resp_array : array-like, shape (n_trials, n_neurons)
+        Neural response data for region 2
+    br1_weights : array-like, shape (n_neurons, n_components)
+        CCA weights for region 1
+    br2_weights : array-like, shape (n_neurons, n_components)
+        CCA weights for region 2
+    stimArray : array-like, shape (n_trials,)
+        Stimulus labels for coloring points
+    brainRegion : str
+        Name of brain region 1
+    brainRegion2 : str
+        Name of brain region 2
+    save_path : str, optional
+        Path to save the plots
+    """
+    # Perform PCA on both datasets
+    pca1 = PCA(n_components=n_pc_components)
+    pca2 = PCA(n_components=n_pc_components)
+
+    # Transform data to PC space
+    pc_data1 = pca1.fit_transform(brain_resp_array)  # Shape: (n_trials, n_pc_components)
+    pc_data2 = pca2.fit_transform(brain2_resp_array)  # Shape: (n_trials, n_pc_components)
+
+    # Transform CCA weight vectors to PC space
+    # br1_weights shape: (n_neurons, n_components)
+    # We want to transform the first two CCA components
+    br1_weights = np.pad(br1_weights, [(0, 0), (0,1)], mode='constant')  # Pad back in with zeros for the dropped component in our cca analysis (since it was empty) so that the feature space is the same for the components and the response data
+    br2_weights = np.pad(br2_weights, [(0, 0), (0,1)], mode='constant')
+    cca_weights_pc1 = pca1.transform(br1_weights)  # Transform first X CCA components
+    cca_weights_pc2 = pca2.transform(br2_weights)  # Transform first X CCA components
+
+    # Create figure with two subplots
+    fig, axes = plt.subplots(1, 2, figsize=(16, 8))
+
+    # Plot 1: Region 1 data in PC space with CCA weights
+    scatter1 = axes[0].scatter(pc_data1[:, 0], pc_data1[:, 1], c=stimArray,
+                               cmap='viridis', alpha=0.6, s=30)
+    axes[0].set_xlabel(f'PC1 ({pca1.explained_variance_ratio_[0]:.1%} variance)')
+    axes[0].set_ylabel(f'PC2 ({pca1.explained_variance_ratio_[1]:.1%} variance)')
+    axes[0].set_title(f'{brainRegion} - PC Space with CCA Weight Vectors')
+
+    # Add CCA weight vectors as arrows
+    origin = np.mean(pc_data1, axis=0)  # Center arrows at data centroid
+    scale_factor = np.std(pc_data1) * .02  # Scale arrows for visibility
+
+    # First CCA component
+    # axes[0].arrow(origin[0], origin[1],
+    #               cca_weights_pc1[0, 0] * scale_factor,
+    #               cca_weights_pc1[0, 1] * scale_factor,
+    #               head_width=scale_factor * 0.1, head_length=scale_factor * 0.1,
+    #               fc='red', ec='red', linewidth=3, alpha=0.8,
+    #               label='CCA Component 1')
+    #
+    # # Second CCA component
+    # axes[0].arrow(origin[0], origin[1],
+    #               cca_weights_pc1[1, 0] * scale_factor,
+    #               cca_weights_pc1[1, 1] * scale_factor,
+    #               head_width=scale_factor * 0.1, head_length=scale_factor * 0.1,
+    #               fc='orange', ec='orange', linewidth=3, alpha=0.8,
+    #               label='CCA Component 2')
+
+    for n_comp in range(n_pc_components):
+        axes[0].arrow(origin[0], origin[1],
+                      cca_weights_pc1[0, n_comp] * scale_factor,
+                      cca_weights_pc1[1, n_comp] * scale_factor,
+                      head_width=scale_factor * 0.1, head_length=scale_factor * 0.1,
+                      # fc='red', ec='red',
+                      linewidth=3, alpha=0.8,
+                      label=f'CCA Component {n_comp + 1}')
+
+    axes[0].grid(True, alpha=0.3)
+    axes[0].legend()
+    plt.colorbar(scatter1, ax=axes[0], label='Stimulus')
+
+    # Plot 2: Region 2 data in PC space with CCA weights
+    scatter2 = axes[1].scatter(pc_data2[:, 0], pc_data2[:, 1], c=stimArray,
+                               cmap='viridis', alpha=0.6, s=30)
+    axes[1].set_xlabel(f'PC1 ({pca2.explained_variance_ratio_[0]:.1%} variance)')
+    axes[1].set_ylabel(f'PC2 ({pca2.explained_variance_ratio_[1]:.1%} variance)')
+    axes[1].set_title(f'{brainRegion2} - PC Space with CCA Weight Vectors')
+
+    # Add CCA weight vectors as arrows
+    origin2 = np.mean(pc_data2, axis=0)  # Center arrows at data centroid
+    scale_factor2 = np.std(pc_data2) * .02  # Scale arrows for visibility
+
+    # First CCA component
+    # axes[1].arrow(origin2[0], origin2[1],
+    #               cca_weights_pc2[0, 0] * scale_factor2,
+    #               cca_weights_pc2[0, 1] * scale_factor2,
+    #               head_width=scale_factor2 * 0.1, head_length=scale_factor2 * 0.1,
+    #               fc='red', ec='red', linewidth=3, alpha=0.8,
+    #               label='CCA Component 1')
+    #
+    # # Second CCA component
+    # axes[1].arrow(origin2[0], origin2[1],
+    #               cca_weights_pc2[1, 0] * scale_factor2,
+    #               cca_weights_pc2[1, 1] * scale_factor2,
+    #               head_width=scale_factor2 * 0.1, head_length=scale_factor2 * 0.1,
+    #               fc='orange', ec='orange', linewidth=3, alpha=0.8,
+    #               label='CCA Component 2')
+
+    for n_comp in range(n_pc_components):
+        axes[1].arrow(origin2[0], origin2[1],
+                      cca_weights_pc2[0, n_comp] * scale_factor2,
+                      cca_weights_pc2[1, n_comp] * scale_factor2,
+                      head_width=scale_factor2 * 0.1, head_length=scale_factor2 * 0.1,
+                      # fc='red', ec='red',
+                      linewidth=3, alpha=0.8,
+                      label=f'CCA Component {n_comp + 1}')
+
+    axes[1].grid(True, alpha=0.3)
+    axes[1].legend()
+    plt.colorbar(scatter2, ax=axes[1], label='Stimulus')
+
+    plt.tight_layout()
+
+    if save_path:
+        plt.savefig(f"{save_path}_pca_cca_weights.png", dpi=300, bbox_inches='tight')
+
+    plt.show()
+
+    # Print explained variance information
+    print(f"\n{brainRegion} PCA:")
+    print(f"PC1 explains {pca1.explained_variance_ratio_[0]:.1%} of variance")
+    print(f"PC2 explains {pca1.explained_variance_ratio_[1]:.1%} of variance")
+    print(f"Total: {pca1.explained_variance_ratio_[:2].sum():.1%} of variance")
+
+    print(f"\n{brainRegion2} PCA:")
+    print(f"PC1 explains {pca2.explained_variance_ratio_[0]:.1%} of variance")
+    print(f"PC2 explains {pca2.explained_variance_ratio_[1]:.1%} of variance")
+    print(f"Total: {pca2.explained_variance_ratio_[:2].sum():.1%} of variance")
+
+    return pca1, pca2, pc_data1, pc_data2, cca_weights_pc1, cca_weights_pc2
+
+
+def plot_cca_weights_comparison(pc_data1, pc_data2, cca_weights_pc1, cca_weights_pc2,
+                                brainRegion, brainRegion2, save_path=None):
+    """
+    Create a comparison plot showing how CCA weight vectors look in both PC spaces.
+    """
+
+    fig, axes = plt.subplots(2, 2, figsize=(16, 12))
+
+    # Plot the weight vectors in both PC spaces for comparison
+    scale1 = np.std(pc_data1) * 3
+    scale2 = np.std(pc_data2) * 3
+
+    # Region 1 CCA weights in Region 1 PC space
+    axes[0, 0].arrow(0, 0, cca_weights_pc1[0, 0] * scale1, cca_weights_pc1[0, 1] * scale1,
+                     head_width=scale1 * 0.1, head_length=scale1 * 0.1, fc='red', ec='red',
+                     linewidth=3, label='CCA Component 1')
+    axes[0, 0].arrow(0, 0, cca_weights_pc1[1, 0] * scale1, cca_weights_pc1[1, 1] * scale1,
+                     head_width=scale1 * 0.1, head_length=scale1 * 0.1, fc='orange', ec='orange',
+                     linewidth=3, label='CCA Component 2')
+    axes[0, 0].set_title(f'{brainRegion} CCA Weights in {brainRegion} PC Space')
+    axes[0, 0].set_xlabel('PC1')
+    axes[0, 0].set_ylabel('PC2')
+    axes[0, 0].grid(True, alpha=0.3)
+    axes[0, 0].legend()
+    axes[0, 0].axis('equal')
+
+    # Region 2 CCA weights in Region 2 PC space
+    axes[0, 1].arrow(0, 0, cca_weights_pc2[0, 0] * scale2, cca_weights_pc2[0, 1] * scale2,
+                     head_width=scale2 * 0.1, head_length=scale2 * 0.1, fc='red', ec='red',
+                     linewidth=3, label='CCA Component 1')
+    axes[0, 1].arrow(0, 0, cca_weights_pc2[1, 0] * scale2, cca_weights_pc2[1, 1] * scale2,
+                     head_width=scale2 * 0.1, head_length=scale2 * 0.1, fc='orange', ec='orange',
+                     linewidth=3, label='CCA Component 2')
+    axes[0, 1].set_title(f'{brainRegion2} CCA Weights in {brainRegion2} PC Space')
+    axes[0, 1].set_xlabel('PC1')
+    axes[0, 1].set_ylabel('PC2')
+    axes[0, 1].grid(True, alpha=0.3)
+    axes[0, 1].legend()
+    axes[0, 1].axis('equal')
+
+    # Angle between CCA components in each PC space
+    angle1_deg = np.degrees(np.arccos(np.clip(np.dot(cca_weights_pc1[0], cca_weights_pc1[1]) /
+                                              (np.linalg.norm(cca_weights_pc1[0]) *
+                                               np.linalg.norm(cca_weights_pc1[1])), -1, 1)))
+    angle2_deg = np.degrees(np.arccos(np.clip(np.dot(cca_weights_pc2[0], cca_weights_pc2[1]) /
+                                              (np.linalg.norm(cca_weights_pc2[0]) *
+                                               np.linalg.norm(cca_weights_pc2[1])), -1, 1)))
+
+    # Text summaries
+    axes[1, 0].text(0.1, 0.8, f'{brainRegion}\nAngle between CCA components:\n{angle1_deg:.1f}°',
+                    transform=axes[1, 0].transAxes, fontsize=14,
+                    bbox=dict(boxstyle="round,pad=0.3", facecolor="lightblue"))
+    axes[1, 0].text(0.1, 0.4, f'CCA Component 1 magnitude:\n{np.linalg.norm(cca_weights_pc1[0]):.3f}',
+                    transform=axes[1, 0].transAxes, fontsize=12)
+    axes[1, 0].text(0.1, 0.2, f'CCA Component 2 magnitude:\n{np.linalg.norm(cca_weights_pc1[1]):.3f}',
+                    transform=axes[1, 0].transAxes, fontsize=12)
+    axes[1, 0].set_title('Summary Statistics - Region 1')
+    axes[1, 0].axis('off')
+
+    axes[1, 1].text(0.1, 0.8, f'{brainRegion2}\nAngle between CCA components:\n{angle2_deg:.1f}°',
+                    transform=axes[1, 1].transAxes, fontsize=14,
+                    bbox=dict(boxstyle="round,pad=0.3", facecolor="lightcoral"))
+    axes[1, 1].text(0.1, 0.4, f'CCA Component 1 magnitude:\n{np.linalg.norm(cca_weights_pc2[0]):.3f}',
+                    transform=axes[1, 1].transAxes, fontsize=12)
+    axes[1, 1].text(0.1, 0.2, f'CCA Component 2 magnitude:\n{np.linalg.norm(cca_weights_pc2[1]):.3f}',
+                    transform=axes[1, 1].transAxes, fontsize=12)
+    axes[1, 1].set_title('Summary Statistics - Region 2')
+    axes[1, 1].axis('off')
+
+    plt.tight_layout()
+
+    if save_path:
+        plt.savefig(f"{save_path}_cca_weights_comparison.png", dpi=300, bbox_inches='tight')
+
+    plt.show()
