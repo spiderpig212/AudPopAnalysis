@@ -14,6 +14,7 @@ from analysis_class import FiringRateAnalysis
 from sklearn.cross_decomposition import CCA
 import funcs as funcs
 
+# NOTE: Semedo et al 2022 had ~25-35 neurons simultaneously used from multiple brain areas: 10 sessions with ~1000 trials each with 5 sessions across 2 monkeys
 neuron_threshold = 20
 response_ranges = ["onset", "sustained", "offset"]
 stim_types = ["pureTones", "AM", "naturalSound"]  # For now only start with pure tones to try and understand analysis meaning
@@ -104,13 +105,13 @@ for i_stim, stim in enumerate(stim_types):
 
                     br1_weights = cca.x_weights_  # Shape is (n_features n_components) from documentation, is the left singular vectors of the CC matrices of each iteration (u^A->B in our written notation)
                     br2_weights = cca.y_weights_  # Shape is (n_targets, n_components) from documentation, ^ but for the right singular vectors (u^B->A in our written notation)
-                    print(f"X dot of first two components is: {np.dot(cca.x_weights_[0, 0], cca.x_weights_[0, 1])}")
-                    print(f"Y dot of first two components is: {np.dot(cca.y_weights_[0, 0], cca.y_weights_[0, 1])}")
+                    print(f"X dot of first two components is: {np.dot(cca.x_weights_[:, 0], cca.x_weights_[:, 1])}")
+                    print(f"Y dot of first two components is: {np.dot(cca.y_weights_[:, 0], cca.y_weights_[:, 1])}")
 
                     # Plotting the CCA dimensions in PC space
                     pca1, pca2, pc_data1, pc_data2, cca_weights_pc1, cca_weights_pc2 = funcs.plot_pca_with_cca_weights(
                         brain_resp_array, brain2_resp_array, br1_weights, br2_weights,
-                        stimArray, brainRegion, brainRegion2, n_pc_components=10,
+                        stimArray, brainRegion, brainRegion2, n_pc_components=2,
                         save_path=f"{file_path}/subspace_overlap_analysis/PCA_CCA_plots/{brainRegion}_{brainRegion2}_{respRange}_{stim}_{session}"
                     )
 

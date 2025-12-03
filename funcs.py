@@ -878,20 +878,24 @@ def plot_pca_with_cca_weights(brain_resp_array, brain2_resp_array, br1_weights, 
         Path to save the plots
     """
     # Perform PCA on both datasets
-    pca1 = PCA(n_components=n_pc_components)
-    pca2 = PCA(n_components=n_pc_components)
+    pca1 = PCA()
+    pca2 = PCA()
 
     # Transform data to PC space
     pc_data1 = pca1.fit_transform(brain_resp_array)  # Shape: (n_trials, n_pc_components)
     pc_data2 = pca2.fit_transform(brain2_resp_array)  # Shape: (n_trials, n_pc_components)
 
     # Transform CCA weight vectors to PC space
-    # br1_weights shape: (n_neurons, n_components)
+    # br1_weights shape: (n_neurons, n_components), though right now n_components is: n_neurons - 1
     # We want to transform the first two CCA components
     br1_weights = np.pad(br1_weights, [(0, 0), (0,1)], mode='constant')  # Pad back in with zeros for the dropped component in our cca analysis (since it was empty) so that the feature space is the same for the components and the response data
     br2_weights = np.pad(br2_weights, [(0, 0), (0,1)], mode='constant')
-    cca_weights_pc1 = pca1.transform(br1_weights)  # Transform first X CCA components
-    cca_weights_pc2 = pca2.transform(br2_weights)  # Transform first X CCA components
+    pc1_weights = pca1.components_
+    pc2_weights = pca2.components_
+    cca_weights_pc1 = pc1_weights.T @ br1_weights
+    cca_weights_pc2 = pc2_weights.T @ br2_weights
+    # cca_weights_pc1 = pca1.transform(br1_weights)  # Transform first X CCA components
+    # cca_weights_pc2 = pca2.transform(br2_weights)  # Transform first X CCA components
 
     # Create figure with two subplots
     fig, axes = plt.subplots(1, 2, figsize=(16, 8))
@@ -905,32 +909,35 @@ def plot_pca_with_cca_weights(brain_resp_array, brain2_resp_array, br1_weights, 
 
     # Add CCA weight vectors as arrows
     origin = np.mean(pc_data1, axis=0)  # Center arrows at data centroid
-    scale_factor = np.std(pc_data1) * .02  # Scale arrows for visibility
+    scale_factor = np.std(pc_data1) * 10  # Scale arrows for visibility
 
-    # First CCA component
-    # axes[0].arrow(origin[0], origin[1],
-    #               cca_weights_pc1[0, 0] * scale_factor,
-    #               cca_weights_pc1[0, 1] * scale_factor,
-    #               head_width=scale_factor * 0.1, head_length=scale_factor * 0.1,
-    #               fc='red', ec='red', linewidth=3, alpha=0.8,
-    #               label='CCA Component 1')
-    #
-    # # Second CCA component
-    # axes[0].arrow(origin[0], origin[1],
-    #               cca_weights_pc1[1, 0] * scale_factor,
-    #               cca_weights_pc1[1, 1] * scale_factor,
-    #               head_width=scale_factor * 0.1, head_length=scale_factor * 0.1,
-    #               fc='orange', ec='orange', linewidth=3, alpha=0.8,
-    #               label='CCA Component 2')
-
-    for n_comp in range(n_pc_components):
+    if n_pc_components == 2:
+        # First CCA component
         axes[0].arrow(origin[0], origin[1],
-                      cca_weights_pc1[0, n_comp] * scale_factor,
-                      cca_weights_pc1[1, n_comp] * scale_factor,
+                      cca_weights_pc1[0, 0] * scale_factor,
+                      cca_weights_pc1[0, 1] * scale_factor,
                       head_width=scale_factor * 0.1, head_length=scale_factor * 0.1,
-                      # fc='red', ec='red',
-                      linewidth=3, alpha=0.8,
-                      label=f'CCA Component {n_comp + 1}')
+                      fc='red', ec='red', linewidth=3, alpha=0.8,
+                      label='CCA Component 1')
+
+        # Second CCA component
+        axes[0].arrow(origin[0], origin[1],
+                      cca_weights_pc1[1, 0] * scale_factor,
+                      cca_weights_pc1[1, 1] * scale_factor,
+                      head_width=scale_factor * 0.1, head_length=scale_factor * 0.1,
+                      fc='orange', ec='orange', linewidth=3, alpha=0.8,
+                      label='CCA Component 2')
+
+    elif n_pc_components > 2:
+        # TODO: Upadte color code to color all of the arrows differently instead of all being black. Duplicate for the code for second graph eblow as well
+        for n_comp in range(n_pc_components):
+            axes[0].arrow(origin[0], origin[1],
+                          cca_weights_pc1[0, n_comp] * scale_factor,
+                          cca_weights_pc1[1, n_comp] * scale_factor,
+                          head_width=scale_factor * 0.1, head_length=scale_factor * 0.1,
+                          # fc='red', ec='red',
+                          linewidth=3, alpha=0.8,
+                          label=f'CCA Component {n_comp + 1}')
 
     axes[0].grid(True, alpha=0.3)
     axes[0].legend()
@@ -945,32 +952,34 @@ def plot_pca_with_cca_weights(brain_resp_array, brain2_resp_array, br1_weights, 
 
     # Add CCA weight vectors as arrows
     origin2 = np.mean(pc_data2, axis=0)  # Center arrows at data centroid
-    scale_factor2 = np.std(pc_data2) * .02  # Scale arrows for visibility
+    scale_factor2 = np.std(pc_data2) * 10  # Scale arrows for visibility
 
-    # First CCA component
-    # axes[1].arrow(origin2[0], origin2[1],
-    #               cca_weights_pc2[0, 0] * scale_factor2,
-    #               cca_weights_pc2[0, 1] * scale_factor2,
-    #               head_width=scale_factor2 * 0.1, head_length=scale_factor2 * 0.1,
-    #               fc='red', ec='red', linewidth=3, alpha=0.8,
-    #               label='CCA Component 1')
-    #
-    # # Second CCA component
-    # axes[1].arrow(origin2[0], origin2[1],
-    #               cca_weights_pc2[1, 0] * scale_factor2,
-    #               cca_weights_pc2[1, 1] * scale_factor2,
-    #               head_width=scale_factor2 * 0.1, head_length=scale_factor2 * 0.1,
-    #               fc='orange', ec='orange', linewidth=3, alpha=0.8,
-    #               label='CCA Component 2')
-
-    for n_comp in range(n_pc_components):
+    if n_pc_components == 2:
+        # First CCA component
         axes[1].arrow(origin2[0], origin2[1],
-                      cca_weights_pc2[0, n_comp] * scale_factor2,
-                      cca_weights_pc2[1, n_comp] * scale_factor2,
+                      cca_weights_pc2[0, 0] * scale_factor2,
+                      cca_weights_pc2[0, 1] * scale_factor2,
                       head_width=scale_factor2 * 0.1, head_length=scale_factor2 * 0.1,
-                      # fc='red', ec='red',
-                      linewidth=3, alpha=0.8,
-                      label=f'CCA Component {n_comp + 1}')
+                      fc='red', ec='red', linewidth=3, alpha=0.8,
+                      label='CCA Component 1')
+
+        # Second CCA component
+        axes[1].arrow(origin2[0], origin2[1],
+                      cca_weights_pc2[1, 0] * scale_factor2,
+                      cca_weights_pc2[1, 1] * scale_factor2,
+                      head_width=scale_factor2 * 0.1, head_length=scale_factor2 * 0.1,
+                      fc='orange', ec='orange', linewidth=3, alpha=0.8,
+                      label='CCA Component 2')
+
+    elif n_pc_components > 2:
+        for n_comp in range(n_pc_components):
+            axes[1].arrow(origin2[0], origin2[1],
+                          cca_weights_pc2[0, n_comp] * scale_factor2,
+                          cca_weights_pc2[1, n_comp] * scale_factor2,
+                          head_width=scale_factor2 * 0.1, head_length=scale_factor2 * 0.1,
+                          # fc='red', ec='red',
+                          linewidth=3, alpha=0.8,
+                          label=f'CCA Component {n_comp + 1}')
 
     axes[1].grid(True, alpha=0.3)
     axes[1].legend()
