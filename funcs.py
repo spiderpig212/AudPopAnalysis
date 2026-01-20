@@ -18,6 +18,11 @@ import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.ticker import MaxNLocator
 import seaborn as sns
+from sklearn.base import BaseEstimator, RegressorMixin
+from sklearn.utils.validation import check_X_y, check_array
+from sklearn.preprocessing import StandardScaler
+from scipy.linalg import svd
+from scipy.stats import pearsonr
 import plotly
 import plotly.graph_objects as go
 import plotly.colors as colors
@@ -1081,3 +1086,315 @@ def plot_cca_weights_comparison(pc_data1, pc_data2, cca_weights_pc1, cca_weights
         plt.savefig(f"{save_path}_cca_weights_comparison.png", dpi=300, bbox_inches='tight')
 
     plt.show()
+
+################# Beginning of CCA null distribution code ############################
+def sample_random_orthogonal(D):
+    # Haar-random orthogonal matrix via QR factorization
+    A = np.random.randn(D, D)
+    Q, R = np.linalg.qr(A)  # Q is orthogonal matrix, so all columns are orthonormal vecs and R is upper triangular
+    # Fix sign ambiguity so Q is uniformly distributed on O(D)
+    d = np.diag(R)
+    Q *= np.sign(d)[None, :]
+    return Q
+
+def symmetric_sqrt(A):
+    """
+    Compute the symmetric square root of a positive definite matrix A.
+    Returns S such that S @ S = A and S is symmetric.
+    """
+    eigenvals, eigenvecs = np.linalg.eigh(A)
+    # Ensure all eigenvalues are positive (for numerical stability)
+    eigenvals = np.maximum(eigenvals, 1e-12)
+    sqrt_eigenvals = np.sqrt(eigenvals)
+    return eigenvecs @ np.diag(sqrt_eigenvals) @ eigenvecs.T
+
+def sample_covariance(Sigma0, rho):
+    """
+    Sigma0: (D, D) SPD matrix
+    rho:   length-D array of eigenvalues (rho_1,...,rho_D)
+           for the covariance in the Sigma0-whitened space.
+    Returns: Sigma^k with E[Sigma^k] = gamma * Sigma0
+    """
+    D = Sigma0.shape[0]
+    # Square root of Sigma0
+    S = symmetric_sqrt(Sigma0)
+
+    # Fixed eigenvalue spectrum in whitened coordinates
+    Lambda = np.diag(rho)
+
+    # Random orientation
+    Q = sample_random_orthogonal(D)
+
+    # Construct tildeSigma^k and map back
+    tildeSigma = Q @ Lambda @ Q.T  # in whitened space
+    Sigma_k = S @ tildeSigma @ S.T  # in original space
+    return Sigma_k
+
+############################################## End of it ########################################
+
+class ReducedRankRegression(BaseEstimator, RegressorMixin):
+    """
+    Reduced Rank Regression implementation.
+
+    This method finds a low-rank approximation to the coefficient matrix
+    in multivariate regression, effectively reducing dimensionality while
+    preserving the most important predictive relationships.
+
+    Parameters:
+    -----------
+    rank : int
+        The rank of the approximation (number of components to keep)
+    fit_intercept : bool, default=True
+        Whether to calculate the intercept
+    standardize : bool, default=False
+        Whether to standardize X and Y before fitting
+    """
+
+    def __init__(self, rank=None, fit_intercept=True, standardize=False):
+        self.rank = rank
+        self.fit_intercept = fit_intercept
+        self.standardize = standardize
+
+    def fit(self, X, Y):
+        """
+        Fit the Reduced Rank Regression model.
+
+        Parameters:
+        -----------
+        X : array-like, shape (n_samples, n_features)
+            Training data
+        Y : array-like, shape (n_samples, n_targets)
+            Target values
+        """
+        X, Y = check_X_y(X, Y, multi_output=True)
+
+        # Store original dimensions
+        self.n_features_in_ = X.shape[1]
+        self.n_targets_ = Y.shape[1] if Y.ndim > 1 else 1
+
+        # Ensure Y is 2D
+        if Y.ndim == 1:
+            Y = Y.reshape(-1, 1)
+
+        # Store means for centering
+        self.X_mean_ = np.mean(X, axis=0)
+        self.Y_mean_ = np.mean(Y, axis=0)
+
+        # Center the data
+        X_centered = X - self.X_mean_
+        Y_centered = Y - self.Y_mean_
+
+        # Standardize if requested
+        if self.standardize:
+            self.X_scaler_ = StandardScaler()
+            self.Y_scaler_ = StandardScaler()
+            X_centered = self.X_scaler_.fit_transform(X_centered)
+            Y_centered = self.Y_scaler_.fit_transform(Y_centered)
+
+        # Compute the full rank OLS solution
+        # B_ols = (X'X)^{-1} X'Y
+        XtX = X_centered.T @ X_centered
+        XtY = X_centered.T @ Y_centered
+
+        # Add small regularization for numerical stability
+        reg = 1e-8 * np.eye(XtX.shape[0])
+        B_ols = np.linalg.solve(XtX + reg, XtY)
+
+        # If rank is not specified, use min dimension
+        if self.rank is None:
+            self.rank = min(X_centered.shape[1], Y_centered.shape[1])
+
+        # Perform SVD on the OLS coefficient matrix
+        U, s, Vt = svd(B_ols, full_matrices=False)
+
+        # Keep only the top 'rank' components
+        self.rank = min(self.rank, len(s))
+        U_reduced = U[:, :self.rank]
+        s_reduced = s[:self.rank]
+        Vt_reduced = Vt[:self.rank, :]
+
+        # Reconstruct the reduced rank coefficient matrix
+        self.coef_ = U_reduced @ np.diag(s_reduced) @ Vt_reduced
+
+        # Store components for analysis
+        self.singular_values_ = s
+        self.U_ = U
+        self.Vt_ = Vt
+        self.explained_variance_ratio_ = s**2 / np.sum(s**2)
+
+        # Compute intercept
+        if self.fit_intercept:
+            self.intercept_ = self.Y_mean_ - self.X_mean_ @ self.coef_
+        else:
+            self.intercept_ = np.zeros(self.n_targets_)
+
+        return self
+
+    def predict(self, X):
+        """
+        Predict using the reduced rank regression model.
+
+        Parameters:
+        -----------
+        X : array-like, shape (n_samples, n_features)
+            Input data
+
+        Returns:
+        --------
+        Y_pred : array, shape (n_samples, n_targets)
+            Predicted values
+        """
+        X = check_array(X)
+
+        # Center the input
+        X_centered = X - self.X_mean_
+
+        # Standardize if it was done during fitting
+        if self.standardize:
+            X_centered = self.X_scaler_.transform(X_centered)
+
+        # Make predictions
+        Y_pred = X_centered @ self.coef_
+
+        if self.fit_intercept:
+            Y_pred += self.intercept_
+
+        # Inverse standardize Y if necessary
+        if self.standardize:
+            Y_pred = self.Y_scaler_.inverse_transform(Y_pred)
+
+        return Y_pred
+
+    def score(self, X, Y):
+        """
+        Return the coefficient of determination R^2 of the prediction.
+        """
+        Y_pred = self.predict(X)
+        if Y.ndim == 1:
+            Y = Y.reshape(-1, 1)
+
+        ss_res = np.sum((Y - Y_pred) ** 2, axis=0)
+        ss_tot = np.sum((Y - np.mean(Y, axis=0)) ** 2, axis=0)
+        r2 = 1 - ss_res / ss_tot
+
+        return np.mean(r2)  # Return average R^2 across targets
+    # def score(self, X, Y):
+    #     "Return Pearson's r^2 for given rank comparison"
+    #     Y_pred = self.predict(X)
+    #     r = np.corrcoef(Y, Y_pred)[0,1:]
+    #     return r.mean()**2
+
+    def plot_singular_values(self, n_components=None):
+        """
+        Plot the singular values to help choose the rank.
+        """
+        if n_components is None:
+            n_components = min(20, len(self.singular_values_))
+
+        plt.figure(figsize=(10, 6))
+
+        plt.subplot(1, 2, 1)
+        plt.plot(self.singular_values_[:n_components], 'bo-')
+        plt.axvline(x=self.rank-1, color='r', linestyle='--',
+                    label=f'Selected rank: {self.rank}')
+        plt.xlabel('Component')
+        plt.ylabel('Singular Value')
+        plt.title('Singular Values')
+        plt.legend()
+        plt.grid(True)
+
+        plt.subplot(1, 2, 2)
+        cumvar = np.cumsum(self.explained_variance_ratio_[:n_components])
+        plt.plot(cumvar, 'ro-')
+        plt.axvline(x=self.rank-1, color='r', linestyle='--',
+                    label=f'Selected rank: {self.rank}')
+        plt.xlabel('Component')
+        plt.ylabel('Cumulative Explained Variance')
+        plt.title('Cumulative Explained Variance')
+        plt.legend()
+        plt.grid(True)
+
+        plt.tight_layout()
+        plt.show()
+
+        print(f"Explained variance with rank {self.rank}: "
+              f"{cumvar[self.rank-1]:.3f}")
+
+def cross_validate_rank(X, Y, ranks=None, cv_folds=5, standardize=False):
+    """
+    Use cross-validation to select the optimal rank.
+    """
+    from sklearn.model_selection import KFold
+
+    if ranks is None:
+        ranks = range(1, min(X.shape[1], Y.shape[1]) + 1)
+
+    kf = KFold(n_splits=cv_folds, shuffle=True, random_state=42)
+    cv_scores = []
+
+    for rank in ranks:
+        fold_scores = []
+        for train_idx, val_idx in kf.split(X):
+            X_train, X_val = X[train_idx], X[val_idx]
+            Y_train, Y_val = Y[train_idx], Y[val_idx]
+
+            rrr = ReducedRankRegression(rank=rank, standardize=standardize)
+            rrr.fit(X_train, Y_train)
+            score = rrr.score(X_val, Y_val)
+            fold_scores.append(score)
+
+        cv_scores.append({
+            'rank': rank,
+            'mean_cv_score': np.mean(fold_scores),
+            'std_cv_score': np.std(fold_scores)
+        })
+
+    cv_df = pd.DataFrame(cv_scores)
+    best_rank = cv_df.loc[cv_df['mean_cv_score'].idxmax(), 'rank']
+
+    # Plot CV results
+    plt.figure(figsize=(10, 6))
+    plt.errorbar(cv_df['rank'], cv_df['mean_cv_score'],
+                 yerr=cv_df['std_cv_score'], marker='o', capsize=5)
+    plt.axvline(x=best_rank, color='r', linestyle='--',
+                label=f'Best rank: {best_rank}')
+    plt.xlabel('Rank')
+    plt.ylabel('Cross-validation Score')
+    plt.title('Cross-validation for Rank Selection')
+    plt.legend()
+    plt.grid(True)
+    plt.show()
+
+    print(f"Best rank from CV: {best_rank}")
+    return cv_df, best_rank
+
+
+def preprocess_neural_data(brain_resp_array, brain2_resp_array):
+    """
+    Preprocess neural data to improve RRR performance.
+    """
+    # Remove neurons with very low variance (essentially non-responsive)
+    X_var = np.var(brain_resp_array, axis=0)
+    Y_var = np.var(brain2_resp_array, axis=0)
+
+    # Keep neurons with variance above threshold
+    var_threshold = np.percentile(X_var, 25)  # Keep top 75% by variance
+    X_mask = X_var > var_threshold
+    Y_mask = Y_var > var_threshold
+
+    X_filtered = brain_resp_array[:, X_mask]
+    Y_filtered = brain2_resp_array[:, Y_mask]
+
+    print(f"Filtered neurons: X {X_mask.sum()}/{len(X_mask)}, Y {Y_mask.sum()}/{len(Y_mask)}")
+
+    # Z-score normalize (important for neural data)
+    from sklearn.preprocessing import StandardScaler
+    scaler_X = StandardScaler()
+    scaler_Y = StandardScaler()
+
+    X_scaled = scaler_X.fit_transform(X_filtered)
+    Y_scaled = scaler_Y.fit_transform(Y_filtered)
+    # X_scaled = scaler_X.fit_transform(brain_resp_array)
+    # Y_scaled = scaler_Y.fit_transform(brain2_resp_array)
+
+    return X_scaled, Y_scaled
