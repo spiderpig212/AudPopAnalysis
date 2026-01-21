@@ -1150,10 +1150,11 @@ class ReducedRankRegression(BaseEstimator, RegressorMixin):
         Whether to standardize X and Y before fitting
     """
 
-    def __init__(self, rank=None, fit_intercept=True, standardize=False):
+    def __init__(self, rank=None, fit_intercept=True, standardize=False, ridge_alpha=0.0):
         self.rank = rank
         self.fit_intercept = fit_intercept
         self.standardize = standardize
+        self.ridge_alpha = ridge_alpha
 
     def fit(self, X, Y):
         """
@@ -1265,9 +1266,29 @@ class ReducedRankRegression(BaseEstimator, RegressorMixin):
 
         return Y_pred
 
+    # def score(self, X, Y):
+    #     """
+    #     Return the coefficient of determination R^2 of the prediction.
+    #     """
+    #     Y_pred = self.predict(X)
+    #     if Y.ndim == 1:
+    #         Y = Y.reshape(-1, 1)
+    #
+    #     ss_res = np.sum((Y - Y_pred) ** 2, axis=0)
+    #     ss_tot = np.sum((Y - np.mean(Y, axis=0)) ** 2, axis=0)
+    #     r2 = 1 - ss_res / ss_tot
+    #
+    #     return np.mean(r2)  # Return average R^2 across targets
+    # def score(self, X, Y):
+    #     "Return Pearson's r^2 for given rank comparison"
+    #     Y_pred = self.predict(X)
+    #     r = np.corrcoef(Y, Y_pred)[0,1:]
+    #     return r.mean()**2
     def score(self, X, Y):
         """
-        Return the coefficient of determination R^2 of the prediction.
+        Return the coefficient of determination R^2 of the prediction with optional ridge regularization.
+
+        The regularized score includes a penalty term: score = R^2 - ridge_alpha * ||coefficients||^2
         """
         Y_pred = self.predict(X)
         if Y.ndim == 1:
@@ -1277,12 +1298,16 @@ class ReducedRankRegression(BaseEstimator, RegressorMixin):
         ss_tot = np.sum((Y - np.mean(Y, axis=0)) ** 2, axis=0)
         r2 = 1 - ss_res / ss_tot
 
-        return np.mean(r2)  # Return average R^2 across targets
-    # def score(self, X, Y):
-    #     "Return Pearson's r^2 for given rank comparison"
-    #     Y_pred = self.predict(X)
-    #     r = np.corrcoef(Y, Y_pred)[0,1:]
-    #     return r.mean()**2
+        # Add ridge penalty term
+        if self.ridge_alpha > 0:
+            # Calculate L2 penalty on coefficients
+            ridge_penalty = self.ridge_alpha * np.sum(self.coef_ ** 2)
+            # Normalize penalty by number of samples and features for scale invariance
+            ridge_penalty_normalized = ridge_penalty / (X.shape[0] * X.shape[1])
+            regularized_score = np.mean(r2) - ridge_penalty_normalized
+            return regularized_score
+        else:
+            return np.mean(r2)  # Return average R^2 across targets
 
     def plot_singular_values(self, n_components=None):
         """
@@ -1320,7 +1345,7 @@ class ReducedRankRegression(BaseEstimator, RegressorMixin):
         print(f"Explained variance with rank {self.rank}: "
               f"{cumvar[self.rank-1]:.3f}")
 
-def cross_validate_rank(X, Y, ranks=None, cv_folds=5, standardize=False):
+def cross_validate_rank(X, Y, ranks=None, cv_folds=5, standardize=False, ridge_alpha=0, verbose=True):
     """
     Use cross-validation to select the optimal rank.
     """
@@ -1338,7 +1363,7 @@ def cross_validate_rank(X, Y, ranks=None, cv_folds=5, standardize=False):
             X_train, X_val = X[train_idx], X[val_idx]
             Y_train, Y_val = Y[train_idx], Y[val_idx]
 
-            rrr = ReducedRankRegression(rank=rank, standardize=standardize)
+            rrr = ReducedRankRegression(rank=rank, standardize=standardize, ridge_alpha=ridge_alpha)
             rrr.fit(X_train, Y_train)
             score = rrr.score(X_val, Y_val)
             fold_scores.append(score)
@@ -1353,48 +1378,58 @@ def cross_validate_rank(X, Y, ranks=None, cv_folds=5, standardize=False):
     best_rank = cv_df.loc[cv_df['mean_cv_score'].idxmax(), 'rank']
 
     # Plot CV results
-    plt.figure(figsize=(10, 6))
-    plt.errorbar(cv_df['rank'], cv_df['mean_cv_score'],
-                 yerr=cv_df['std_cv_score'], marker='o', capsize=5)
-    plt.axvline(x=best_rank, color='r', linestyle='--',
-                label=f'Best rank: {best_rank}')
-    plt.xlabel('Rank')
-    plt.ylabel('Cross-validation Score')
-    plt.title('Cross-validation for Rank Selection')
-    plt.legend()
-    plt.grid(True)
-    plt.show()
+    if verbose:
+        plt.figure(figsize=(10, 6))
+        plt.errorbar(cv_df['rank'], cv_df['mean_cv_score'],
+                     yerr=cv_df['std_cv_score'], marker='o', capsize=5)
+        plt.axvline(x=best_rank, color='r', linestyle='--',
+                    label=f'Best rank: {best_rank}')
+        plt.xlabel('Rank')
+        plt.ylabel('Cross-validation Score')
+        plt.title('Cross-validation for Rank Selection')
+        plt.legend()
+        plt.grid(True)
+        plt.show()
 
     print(f"Best rank from CV: {best_rank}")
     return cv_df, best_rank
 
 
-def preprocess_neural_data(brain_resp_array, brain2_resp_array):
+def preprocess_neural_data(brain_resp_array, brain2_resp_array, verbose=True):
     """
     Preprocess neural data to improve RRR performance.
     """
+    brain_mean = np.mean(brain_resp_array, axis=0)
+    brain2_mean = np.mean(brain2_resp_array, axis=0)
+
+    # Center the data
+    brain_resp_array = brain_resp_array - brain_mean
+    brain2_resp_array = brain2_resp_array - brain2_mean
+
     # Remove neurons with very low variance (essentially non-responsive)
-    X_var = np.var(brain_resp_array, axis=0)
-    Y_var = np.var(brain2_resp_array, axis=0)
+    # X_var = np.var(brain_resp_array, axis=0)
+    # Y_var = np.var(brain2_resp_array, axis=0)
+    #
+    # # Keep neurons with variance above threshold
+    # var_threshold = np.percentile(X_var, 25)  # Keep top 75% by variance
+    # X_mask = X_var > var_threshold
+    # Y_mask = Y_var > var_threshold
+    #
+    # X_filtered = brain_resp_array[:, X_mask]
+    # Y_filtered = brain2_resp_array[:, Y_mask]
 
-    # Keep neurons with variance above threshold
-    var_threshold = np.percentile(X_var, 25)  # Keep top 75% by variance
-    X_mask = X_var > var_threshold
-    Y_mask = Y_var > var_threshold
-
-    X_filtered = brain_resp_array[:, X_mask]
-    Y_filtered = brain2_resp_array[:, Y_mask]
-
-    print(f"Filtered neurons: X {X_mask.sum()}/{len(X_mask)}, Y {Y_mask.sum()}/{len(Y_mask)}")
+    # if verbose:
+    #     print(f"Filtered neurons: X {X_mask.sum()}/{len(X_mask)}, Y {Y_mask.sum()}/{len(Y_mask)}")
 
     # Z-score normalize (important for neural data)
     from sklearn.preprocessing import StandardScaler
     scaler_X = StandardScaler()
     scaler_Y = StandardScaler()
 
-    X_scaled = scaler_X.fit_transform(X_filtered)
-    Y_scaled = scaler_Y.fit_transform(Y_filtered)
-    # X_scaled = scaler_X.fit_transform(brain_resp_array)
-    # Y_scaled = scaler_Y.fit_transform(brain2_resp_array)
+    # X_scaled = scaler_X.fit_transform(X_filtered)
+    # Y_scaled = scaler_Y.fit_transform(Y_filtered)
+    X_scaled = scaler_X.fit_transform(brain_resp_array)
+    Y_scaled = scaler_Y.fit_transform(brain2_resp_array)
 
     return X_scaled, Y_scaled
+
