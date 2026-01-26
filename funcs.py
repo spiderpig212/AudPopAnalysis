@@ -1158,7 +1158,7 @@ class ReducedRankRegression(BaseEstimator, RegressorMixin):
 
     def fit(self, X, Y):
         """
-        Fit the Reduced Rank Regression model.
+        Fit the Reduced Rank Regression model with optional ridge regularization.
 
         Parameters:
         -----------
@@ -1192,36 +1192,77 @@ class ReducedRankRegression(BaseEstimator, RegressorMixin):
             X_centered = self.X_scaler_.fit_transform(X_centered)
             Y_centered = self.Y_scaler_.fit_transform(Y_centered)
 
-        # Compute the full rank OLS solution
-        # B_ols = (X'X)^{-1} X'Y
+        # Compute ridge-regularized solution following the paper
         XtX = X_centered.T @ X_centered
         XtY = X_centered.T @ Y_centered
 
-        # Add small regularization for numerical stability
-        reg = 1e-8 * np.eye(XtX.shape[0])
-        B_ols = np.linalg.solve(XtX + reg, XtY)
+        # Add ridge regularization term
+        if hasattr(self, 'ridge_alpha') and self.ridge_alpha > 0:
+            # Ridge regularization: W_ridge = (X'X + λ_ridge*I)^(-1) X'Y
+            ridge_term = self.ridge_alpha * np.eye(XtX.shape[0])
+            W_ridge = np.linalg.solve(XtX + ridge_term, XtY)
 
-        # If rank is not specified, use min dimension
-        if self.rank is None:
-            self.rank = min(X_centered.shape[1], Y_centered.shape[1])
+            # Following equation (65): V_RRRR = eig(Y'X * W_ridge)
+            YtX = Y_centered.T @ X_centered
+            M = YtX @ W_ridge  # This is Y'X * W_ridge
 
-        # Perform SVD on the OLS coefficient matrix
-        U, s, Vt = svd(B_ols, full_matrices=False)
+            # Eigendecomposition of M
+            eigenvals, eigenvecs = np.linalg.eigh(M)
 
-        # Keep only the top 'rank' components
-        self.rank = min(self.rank, len(s))
-        U_reduced = U[:, :self.rank]
-        s_reduced = s[:self.rank]
-        Vt_reduced = Vt[:self.rank, :]
+            # Sort by eigenvalues in descending order
+            idx = np.argsort(eigenvals)[::-1]
+            eigenvals = eigenvals[idx]
+            eigenvecs = eigenvecs[:, idx]
 
-        # Reconstruct the reduced rank coefficient matrix
-        self.coef_ = U_reduced @ np.diag(s_reduced) @ Vt_reduced
+            # If rank is not specified, use min dimension
+            if self.rank is None:
+                self.rank = min(X_centered.shape[1], Y_centered.shape[1])
 
-        # Store components for analysis
-        self.singular_values_ = s
-        self.U_ = U
-        self.Vt_ = Vt
-        self.explained_variance_ratio_ = s**2 / np.sum(s**2)
+            # Keep only the top 'rank' components
+            self.rank = min(self.rank, len(eigenvals))
+            V_reduced = eigenvecs[:, :self.rank]  # This is V_RRRR from equation (65)
+
+            # Compute U_RRRR = W_ridge * V_RRRR from equation (66)
+            U_reduced = W_ridge @ V_reduced
+
+            # Reconstruct the reduced rank coefficient matrix
+            self.coef_ = U_reduced @ V_reduced.T
+
+            # Store components for analysis (using eigenvalues as singular values)
+            self.singular_values_ = np.sqrt(np.maximum(eigenvals, 0))  # Ensure non-negative
+            # For compatibility, create U and Vt from the ridge solution
+            self.U_ = U_reduced
+            self.Vt_ = V_reduced.T
+            self.explained_variance_ratio_ = eigenvals[:len(eigenvals)] / np.sum(eigenvals) if np.sum(
+                eigenvals) > 0 else np.zeros(len(eigenvals))
+
+        else:
+            # Original RRR without ridge regularization
+            # Add small regularization for numerical stability only
+            reg = 1e-8 * np.eye(XtX.shape[0])
+            B_ols = np.linalg.solve(XtX + reg, XtY)
+
+            # If rank is not specified, use min dimension
+            if self.rank is None:
+                self.rank = min(X_centered.shape[1], Y_centered.shape[1])
+
+            # Perform SVD on the OLS coefficient matrix
+            U, s, Vt = svd(B_ols, full_matrices=False)
+
+            # Keep only the top 'rank' components
+            self.rank = min(self.rank, len(s))
+            U_reduced = U[:, :self.rank]
+            s_reduced = s[:self.rank]
+            Vt_reduced = Vt[:self.rank, :]
+
+            # Reconstruct the reduced rank coefficient matrix
+            self.coef_ = U_reduced @ np.diag(s_reduced) @ Vt_reduced
+
+            # Store components for analysis
+            self.singular_values_ = s
+            self.U_ = U
+            self.Vt_ = Vt
+            self.explained_variance_ratio_ = s ** 2 / np.sum(s ** 2)
 
         # Compute intercept
         if self.fit_intercept:
@@ -1268,7 +1309,9 @@ class ReducedRankRegression(BaseEstimator, RegressorMixin):
 
     # def score(self, X, Y):
     #     """
-    #     Return the coefficient of determination R^2 of the prediction.
+    #     Return the coefficient of determination R^2 of the prediction with optional ridge regularization.
+    #
+    #     The regularized score includes a penalty term: score = R^2 - ridge_alpha * ||coefficients||^2
     #     """
     #     Y_pred = self.predict(X)
     #     if Y.ndim == 1:
@@ -1279,35 +1322,47 @@ class ReducedRankRegression(BaseEstimator, RegressorMixin):
     #     r2 = 1 - ss_res / ss_tot
     #
     #     return np.mean(r2)  # Return average R^2 across targets
-    # def score(self, X, Y):
-    #     "Return Pearson's r^2 for given rank comparison"
-    #     Y_pred = self.predict(X)
-    #     r = np.corrcoef(Y, Y_pred)[0,1:]
-    #     return r.mean()**2
+
     def score(self, X, Y):
         """
-        Return the coefficient of determination R^2 of the prediction with optional ridge regularization.
+        Return the coefficient of determination R^2 of the prediction with robust handling of edge cases.
 
-        The regularized score includes a penalty term: score = R^2 - ridge_alpha * ||coefficients||^2
+        Uses multiple fallback methods to avoid -inf values when targets have zero variance.
         """
         Y_pred = self.predict(X)
         if Y.ndim == 1:
             Y = Y.reshape(-1, 1)
 
+        # Method 1: Standard R² with safeguards
         ss_res = np.sum((Y - Y_pred) ** 2, axis=0)
         ss_tot = np.sum((Y - np.mean(Y, axis=0)) ** 2, axis=0)
-        r2 = 1 - ss_res / ss_tot
 
-        # Add ridge penalty term
-        if self.ridge_alpha > 0:
-            # Calculate L2 penalty on coefficients
-            ridge_penalty = self.ridge_alpha * np.sum(self.coef_ ** 2)
-            # Normalize penalty by number of samples and features for scale invariance
-            ridge_penalty_normalized = ridge_penalty / (X.shape[0] * X.shape[1])
-            regularized_score = np.mean(r2) - ridge_penalty_normalized
-            return regularized_score
-        else:
-            return np.mean(r2)  # Return average R^2 across targets
+        # Avoid division by zero - use correlation-based R² as fallback
+        r2_scores = []
+        for i in range(Y.shape[1]):
+            if ss_tot[i] < 1e-10:  # Target has essentially zero variance
+                # Fallback: Use correlation coefficient squared
+                y_true = Y[:, i]
+                y_pred = Y_pred[:, i]
+
+                # Check if both true and predicted have variance
+                if np.var(y_true) < 1e-10 and np.var(y_pred) < 1e-10:
+                    # Both are constant - perfect prediction if they're the same
+                    r2_scores.append(1.0 if np.allclose(y_true, y_pred) else 0.0)
+                elif np.var(y_pred) < 1e-10:
+                    # Predicted values are constant but true values vary
+                    r2_scores.append(0.0)
+                else:
+                    # Use correlation coefficient squared
+                    corr_coef = np.corrcoef(y_true, y_pred)[0, 1]
+                    r2_scores.append(corr_coef ** 2 if not np.isnan(corr_coef) else 0.0)
+            else:
+                # Standard R² calculation
+                r2 = 1 - ss_res[i] / ss_tot[i]
+                # Clip to reasonable range (R² can be negative for very poor fits)
+                r2_scores.append(np.clip(r2, -1.0, 1.0))
+
+        return np.mean(r2_scores)
 
     def plot_singular_values(self, n_components=None):
         """
@@ -1345,54 +1400,128 @@ class ReducedRankRegression(BaseEstimator, RegressorMixin):
         print(f"Explained variance with rank {self.rank}: "
               f"{cumvar[self.rank-1]:.3f}")
 
-def cross_validate_rank(X, Y, ranks=None, cv_folds=5, standardize=False, ridge_alpha=0, verbose=True):
+
+def cross_validate_rank(X, Y, ranks=None, ridge_alphas=None, cv_folds=5, standardize=False, verbose=True, save=None):
     """
-    Use cross-validation to select the optimal rank.
+    Use cross-validation to select the optimal rank and ridge_alpha.
+    Save should be a file path
     """
     from sklearn.model_selection import KFold
 
     if ranks is None:
         ranks = range(1, min(X.shape[1], Y.shape[1]) + 1)
 
+    if ridge_alphas is None:
+        ridge_alphas = np.logspace(-4, 4, 9)  # Default range of alpha values
+
     kf = KFold(n_splits=cv_folds, shuffle=True, random_state=42)
     cv_scores = []
 
     for rank in ranks:
-        fold_scores = []
-        for train_idx, val_idx in kf.split(X):
-            X_train, X_val = X[train_idx], X[val_idx]
-            Y_train, Y_val = Y[train_idx], Y[val_idx]
+        for ridge_alpha in ridge_alphas:
+            fold_scores = []
+            for train_idx, val_idx in kf.split(X):
+                X_train, X_val = X[train_idx], X[val_idx]
+                Y_train, Y_val = Y[train_idx], Y[val_idx]
 
-            rrr = ReducedRankRegression(rank=rank, standardize=standardize, ridge_alpha=ridge_alpha)
-            rrr.fit(X_train, Y_train)
-            score = rrr.score(X_val, Y_val)
-            fold_scores.append(score)
+                rrr = ReducedRankRegression(rank=rank, standardize=standardize, ridge_alpha=ridge_alpha)
+                rrr.fit(X_train, Y_train)
+                score = rrr.score(X_val, Y_val)
+                fold_scores.append(score)
 
-        cv_scores.append({
-            'rank': rank,
-            'mean_cv_score': np.mean(fold_scores),
-            'std_cv_score': np.std(fold_scores)
-        })
+            cv_scores.append({
+                'rank': rank,
+                'ridge_alpha': ridge_alpha,
+                'mean_cv_score': np.mean(fold_scores),
+                'std_cv_score': np.std(fold_scores)
+            })
 
     cv_df = pd.DataFrame(cv_scores)
-    best_rank = cv_df.loc[cv_df['mean_cv_score'].idxmax(), 'rank']
+    best_idx = cv_df['mean_cv_score'].idxmax()
+    best_rank = cv_df.loc[best_idx, 'rank']
+    best_alpha = cv_df.loc[best_idx, 'ridge_alpha']
 
     # Plot CV results
     if verbose:
-        plt.figure(figsize=(10, 6))
-        plt.errorbar(cv_df['rank'], cv_df['mean_cv_score'],
-                     yerr=cv_df['std_cv_score'], marker='o', capsize=5)
+        # Create a pivot table for heatmap visualization
+        pivot_df = cv_df.pivot(index='ridge_alpha', columns='rank', values='mean_cv_score')
+
+        plt.figure(figsize=(12, 8))
+
+        # Subplot 1: Heatmap of CV scores
+        plt.subplot(2, 2, 1)
+        plt.imshow(pivot_df.values, cmap='viridis', aspect='auto', origin='lower')
+        plt.colorbar(label='CV Score')
+        plt.xlabel('Rank')
+        plt.ylabel('Ridge Alpha')
+        plt.title('Cross-validation Scores Heatmap')
+
+        # Set tick labels
+        rank_ticks = np.arange(len(pivot_df.columns))
+        alpha_ticks = np.arange(len(pivot_df.index))
+        plt.xticks(rank_ticks[::max(1, len(rank_ticks) // 10)],
+                   pivot_df.columns[::max(1, len(rank_ticks) // 10)])
+        plt.yticks(alpha_ticks[::max(1, len(alpha_ticks) // 5)],
+                   [f"{val:.1e}" for val in pivot_df.index[::max(1, len(alpha_ticks) // 5)]])
+
+        # Mark the best combination
+        best_rank_idx = list(pivot_df.columns).index(best_rank)
+        best_alpha_idx = list(pivot_df.index).index(best_alpha)
+        plt.scatter(best_rank_idx, best_alpha_idx, color='red', s=100, marker='x', linewidth=3)
+
+        # Subplot 2: CV scores for best alpha across ranks
+        plt.subplot(2, 2, 2)
+        best_alpha_data = cv_df[cv_df['ridge_alpha'] == best_alpha]
+        plt.errorbar(best_alpha_data['rank'], best_alpha_data['mean_cv_score'],
+                     yerr=best_alpha_data['std_cv_score'], marker='o', capsize=5)
         plt.axvline(x=best_rank, color='r', linestyle='--',
                     label=f'Best rank: {best_rank}')
         plt.xlabel('Rank')
         plt.ylabel('Cross-validation Score')
-        plt.title('Cross-validation for Rank Selection')
+        plt.title(f'CV Scores for Best Alpha ({best_alpha:.1e})')
         plt.legend()
         plt.grid(True)
+
+        # Subplot 3: CV scores for best rank across alphas
+        plt.subplot(2, 2, 3)
+        best_rank_data = cv_df[cv_df['rank'] == best_rank]
+        plt.semilogx(best_rank_data['ridge_alpha'], best_rank_data['mean_cv_score'],
+                     marker='o', linewidth=2)
+        plt.axvline(x=best_alpha, color='r', linestyle='--',
+                    label=f'Best alpha: {best_alpha:.1e}')
+        plt.xlabel('Ridge Alpha')
+        plt.ylabel('Cross-validation Score')
+        plt.title(f'CV Scores for Best Rank ({best_rank})')
+        plt.legend()
+        plt.grid(True)
+
+        # Subplot 4: Summary statistics
+        plt.subplot(2, 2, 4)
+        plt.axis('off')
+        summary_text = f"""Best Parameters:
+        Rank: {best_rank}
+        Ridge Alpha: {best_alpha:.2e}
+        Best CV Score: {cv_df.loc[best_idx, 'mean_cv_score']:.4f} ± {cv_df.loc[best_idx, 'std_cv_score']:.4f}
+
+        Search Space:
+        Ranks: {min(ranks)} to {max(ranks)}
+        Ridge Alphas: {min(ridge_alphas):.1e} to {max(ridge_alphas):.1e}
+        Total Combinations: {len(cv_scores)}"""
+
+        plt.text(0.1, 0.5, summary_text, fontsize=10, verticalalignment='center',
+                 bbox=dict(boxstyle="round,pad=0.3", facecolor="lightgray"))
+
+        plt.tight_layout()
+
+        if save is not None:
+            plt.savefig(save)
         plt.show()
 
     print(f"Best rank from CV: {best_rank}")
-    return cv_df, best_rank
+    print(f"Best ridge_alpha from CV: {best_alpha:.2e}")
+    print(f"Best CV score: {cv_df.loc[best_idx, 'mean_cv_score']:.4f} ± {cv_df.loc[best_idx, 'std_cv_score']:.4f}")
+
+    return cv_df, best_rank, best_alpha
 
 
 def preprocess_neural_data(brain_resp_array, brain2_resp_array, verbose=True):
@@ -1405,21 +1534,6 @@ def preprocess_neural_data(brain_resp_array, brain2_resp_array, verbose=True):
     # Center the data
     brain_resp_array = brain_resp_array - brain_mean
     brain2_resp_array = brain2_resp_array - brain2_mean
-
-    # Remove neurons with very low variance (essentially non-responsive)
-    # X_var = np.var(brain_resp_array, axis=0)
-    # Y_var = np.var(brain2_resp_array, axis=0)
-    #
-    # # Keep neurons with variance above threshold
-    # var_threshold = np.percentile(X_var, 25)  # Keep top 75% by variance
-    # X_mask = X_var > var_threshold
-    # Y_mask = Y_var > var_threshold
-    #
-    # X_filtered = brain_resp_array[:, X_mask]
-    # Y_filtered = brain2_resp_array[:, Y_mask]
-
-    # if verbose:
-    #     print(f"Filtered neurons: X {X_mask.sum()}/{len(X_mask)}, Y {Y_mask.sum()}/{len(Y_mask)}")
 
     # Z-score normalize (important for neural data)
     from sklearn.preprocessing import StandardScaler

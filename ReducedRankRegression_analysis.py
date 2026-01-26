@@ -13,7 +13,7 @@ from sklearn.model_selection import train_test_split
 from matplotlib import pyplot as plt
 
 
-def perform_within_region_analysis(brain_resp_array, brainRegion, session, respRange, stim, n_iterations=100):
+def perform_within_region_analysis(brain_resp_array, brainRegion, session, respRange, stim, n_iterations=100, standardize=True, ridge_alpha=1.0):
     """
     Perform within-region analysis by randomly splitting cells into two halves
     and running RRR analysis between the halves.
@@ -62,10 +62,12 @@ def perform_within_region_analysis(brain_resp_array, brainRegion, session, respR
         half1_processed, half2_processed = preprocess_neural_data(half1_data, half2_data, verbose=False)
 
         # Cross-validate to find best rank
-        cv_df, best_rank = cross_validate_rank(half1_processed, half2_processed, verbose=False)
+        cv_file_path = f"{file_path}/RRR_results/CV_plots/{brainRegion}A_{brainRegion}B_{session}.png"
+        cv_df, best_rank, best_alpha = cross_validate_rank(half1_processed, half2_processed, verbose=False,
+                                                           standardize=True, save=cv_file_path)
 
         # Fit RRR model with best rank
-        rrr_model = ReducedRankRegression(rank=best_rank, standardize=True)
+        rrr_model = ReducedRankRegression(rank=best_rank, standardize=True, ridge_alpha=best_alpha)
         rrr_model.fit(half1_processed, half2_processed)
 
         # Get predictions and calculate correlation
@@ -160,7 +162,8 @@ for i_stim, stim in enumerate(stim_types):
                     # Check if we have enough neurons for within-region analysis (need at least 2x N for two halves of 30 each)
                     if region1_sess_count >= 2*neuron_threshold:
                         within_region_result = perform_within_region_analysis(
-                            brain_resp_array, brainRegion, session, respRange, stim, n_iterations=10
+                            brain_resp_array, brainRegion, session, respRange, stim, n_iterations=10,
+                            ridge_alpha=ridge_alpha, standardize=True
                         )
                         rrr_results.append(within_region_result)
                     else:
@@ -185,13 +188,15 @@ for i_stim, stim in enumerate(stim_types):
                     region2_neurons = np.random.choice(brain2_resp_array.shape[1], size=neuron_threshold, replace=False)
                     brain2_resp_array = brain2_resp_array[:, region2_neurons]
 
-                    brain_resp_array, brain2_resp_array = preprocess_neural_data(brain_resp_array, brain2_resp_array)
+                    # brain_resp_array, brain2_resp_array = preprocess_neural_data(brain_resp_array, brain2_resp_array)
 
                     # RRR model fitting to find the best rank for each region
-                    cv_df, best_rank = cross_validate_rank(brain_resp_array, brain2_resp_array, ridge_alpha=ridge_alpha)
+                    cv_file_path = f"{file_path}/RRR_results/CV_plots/{brainRegion2}_{brainRegion}_{session}.png"
+                    cv_df, best_rank, best_alpha = cross_validate_rank(brain_resp_array, brain2_resp_array,
+                                                                       standardize=True, save=cv_file_path)
 
                     # Refit now using best rank to store results
-                    rrr_model = ReducedRankRegression(rank=best_rank, standardize=True, ridge_alpha=ridge_alpha)
+                    rrr_model = ReducedRankRegression(rank=best_rank, standardize=True, ridge_alpha=best_alpha)
                     rrr_model.fit(brain_resp_array, brain2_resp_array)
 
                     Y_pred = rrr_model.predict(brain_resp_array)

@@ -12,6 +12,7 @@ from scipy.stats import mannwhitneyu
 from statsmodels.stats.multitest import multipletests
 import itertools
 from sklearn.cross_decomposition import CCA
+from sklearn.model_selection import train_test_split
 from tqdm import tqdm
 import matplotlib.pyplot as plt
 import seaborn as sns
@@ -83,9 +84,12 @@ for i_stim, stim in enumerate(stim_types):
                     region2_neurons = np.random.choice(brain2_resp_array.shape[1], size=neuron_threshold, replace=False)
                     brain2_resp_array = brain2_resp_array[:, region2_neurons]
 
+                    br1_train, br1_test, br2_train, br2_test = train_test_split(brain_resp_array, brain2_resp_array, test_size=0.2, random_state=42)
                     n_components = np.min([brain_resp_array.shape[1], brain2_resp_array.shape[1]])  # Whichever region has fewer neurons (should always be equal to neuron threshold now)
                     cca = CCA(n_components=n_components)
-                    response_transform = cca.fit_transform(brain_resp_array, brain2_resp_array)
+                    response_transform_train = cca.fit_transform(br1_train, br2_train)
+
+                    response_transform = cca.transform(br1_test, br2_test)
 
                     correlation_val = np.corrcoef(response_transform[0][:, 0], response_transform[1][:, 0])[0, 1]
 
