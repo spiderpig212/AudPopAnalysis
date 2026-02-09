@@ -260,7 +260,7 @@ def calculate_fr_arrays(celldb:pd.DataFrame, stimType:str, stimVar:str, timeRang
         firingRateSustain = spikesEachTrialEachPeriod[2] / periodDuration[2]
         firingRateOffset = spikesEachTrialEachPeriod[3] / periodDuration[3]
 
-        sorted_stim_ind = np.argsort(currentStim)
+        sorted_stim_ind = np.argsort(currentStim, kind='stable')
         sorted_stim_array = currentStim[sorted_stim_ind]
         sorted_fr_base = firingRateBase[sorted_stim_ind]
         sorted_fr_onset = firingRateOnset[sorted_stim_ind]
