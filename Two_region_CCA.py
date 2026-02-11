@@ -1,7 +1,8 @@
+
 """
 CCA Analysis Script: Compare two brain regions using 5-fold cross-validation
 Creates scree plots showing correlation distributions for each CCA component
-and determines optimal dimensionality using non-parametric statistical tests.
+and determines optimal dimensionality using permutation tests.
 """
 
 import os
@@ -20,7 +21,7 @@ from jaratoolbox import settings, celldatabase
 
 
 class TwoRegionCCAAnalysis:
-    def __init__(self, neuron_threshold=20, n_splits=5, random_state=42):
+    def __init__(self, neuron_threshold=20, n_splits=5, random_state=42, n_permutations=1000):
         """
         Initialize the two-region CCA analysis
 
@@ -32,10 +33,13 @@ class TwoRegionCCAAnalysis:
             Number of folds for cross-validation
         random_state : int
             Random seed for reproducibility
+        n_permutations : int
+            Number of permutations for statistical testing
         """
         self.neuron_threshold = neuron_threshold
         self.n_splits = n_splits
         self.random_state = random_state
+        self.n_permutations = n_permutations
         self.fr_db = FiringRateAnalysis(db_suffix="coords_updated")
         self.file_path = self.fr_db.figdata_path
         self.stim_types = self.fr_db.stim_types
@@ -58,13 +62,16 @@ class TwoRegionCCAAnalysis:
 
         Returns:
         --------
-        correlation_matrix : np.ndarray
-            Correlation values for each component across CV folds
+        test_correlation_matrix : np.ndarray
+            Test correlation values for each component across CV folds
+        train_correlation_matrix : np.ndarray
+            Training correlation values for each component across CV folds
         """
         n_components = min(region1_data.shape[1], region2_data.shape[1])
         kf = KFold(n_splits=self.n_splits, shuffle=True, random_state=self.random_state)
 
-        correlation_matrix = []
+        test_correlation_matrix = []
+        train_correlation_matrix = []
 
         for train_idx, test_idx in kf.split(region1_data):
             r1_train, r1_test = region1_data[train_idx], region1_data[test_idx]
@@ -73,27 +80,92 @@ class TwoRegionCCAAnalysis:
             cca = CCA(n_components=n_components)
             cca.fit(r1_train, r2_train)
 
-            r1_transform, r2_transform = cca.transform(r1_test, r2_test)
+            # Transform test data
+            r1_test_transform, r2_test_transform = cca.transform(r1_test, r2_test)
 
-            # Calculate correlations for each component
-            fold_correlations = []
+            # Transform training data
+            r1_train_transform, r2_train_transform = cca.transform(r1_train, r2_train)
+
+            # Calculate test correlations for each component
+            test_fold_correlations = []
             for comp in range(n_components):
-                corr = np.corrcoef(r1_transform[:, comp], r2_transform[:, comp])[0, 1]
-                fold_correlations.append(corr)
+                corr = np.corrcoef(r1_test_transform[:, comp], r2_test_transform[:, comp])[0, 1]
+                test_fold_correlations.append(corr)
+            test_correlation_matrix.append(test_fold_correlations)
 
-            correlation_matrix.append(fold_correlations)
+            # Calculate training correlations for each component
+            train_fold_correlations = []
+            for comp in range(n_components):
+                corr = np.corrcoef(r1_train_transform[:, comp], r2_train_transform[:, comp])[0, 1]
+                train_fold_correlations.append(corr)
+            train_correlation_matrix.append(train_fold_correlations)
 
-        return np.array(correlation_matrix)  # Shape: (n_folds, n_components)
+        return np.array(test_correlation_matrix), np.array(train_correlation_matrix)
 
-    def statistical_test_components(self, correlation_matrix, alpha=0.05):
+    def permutation_test(self, region1_data, region2_data):
         """
-        Test each component against null hypothesis of mean correlation = 0
-        using Wilcoxon signed-rank test (non-parametric one-sided test)
+        Perform permutation test for statistical significance
 
         Parameters:
         -----------
-        correlation_matrix : np.ndarray
-            Correlation values for each component across CV folds
+        region1_data : np.ndarray
+            Neural data from region 1 (trials x neurons)
+        region2_data : np.ndarray
+            Neural data from region 2 (trials x neurons)
+
+        Returns:
+        --------
+        permutation_correlations : np.ndarray
+            Distribution of permuted correlations for each component
+            Shape: (n_permutations, n_components)
+        """
+        n_components = min(region1_data.shape[1], region2_data.shape[1])
+        permutation_correlations = []
+
+        # Set random seed for reproducibility
+        np.random.seed(self.random_state)
+
+        print(f"Running {self.n_permutations} permutations...")
+        for perm in tqdm(range(self.n_permutations)):
+            # Shuffle one region (region2) to break correlations
+            perm_indices = np.random.permutation(region2_data.shape[0])
+            region2_permuted = region2_data[perm_indices]
+
+            # Run cross-validation on permuted data
+            kf = KFold(n_splits=self.n_splits, shuffle=True, random_state=perm)
+            perm_correlations = []
+
+            for train_idx, test_idx in kf.split(region1_data):
+                r1_train, r1_test = region1_data[train_idx], region1_data[test_idx]
+                r2_train, r2_test = region2_permuted[train_idx], region2_permuted[test_idx]
+
+                cca = CCA(n_components=n_components)
+                cca.fit(r1_train, r2_train)
+                r1_transform, r2_transform = cca.transform(r1_test, r2_test)
+
+                # Calculate correlations for each component
+                fold_correlations = []
+                for comp in range(n_components):
+                    corr = np.corrcoef(r1_transform[:, comp], r2_transform[:, comp])[0, 1]
+                    fold_correlations.append(corr)
+                perm_correlations.append(fold_correlations)
+
+            # Average across folds for this permutation
+            perm_r_bar = np.mean(perm_correlations, axis=0)
+            permutation_correlations.append(perm_r_bar)
+
+        return np.array(permutation_correlations)
+
+    def permutation_test_components(self, r_bar, permutation_correlations, alpha=0.05):
+        """
+        Test each component using permutation test results
+
+        Parameters:
+        -----------
+        r_bar : np.ndarray
+            Average test correlations for each component
+        permutation_correlations : np.ndarray
+            Distribution of permuted correlations for each component
         alpha : float
             Significance level
 
@@ -104,13 +176,12 @@ class TwoRegionCCAAnalysis:
         p_values : np.ndarray
             P-values for each component
         """
-        n_components = correlation_matrix.shape[1]
+        n_components = len(r_bar)
         p_values = []
 
         for comp in range(n_components):
-            correlations = correlation_matrix[:, comp]
-            # One-sided test: H0: median = 0, H1: median > 0
-            stat, p_val = stats.wilcoxon(correlations, alternative='greater')
+            # Calculate p-value as proportion of permutations >= observed r_bar
+            p_val = np.mean(permutation_correlations[:, comp] >= r_bar[comp])
             p_values.append(p_val)
 
         p_values = np.array(p_values)
@@ -130,15 +201,20 @@ class TwoRegionCCAAnalysis:
 
         return significant_components, p_values
 
-    def create_scree_plot(self, correlation_matrix, p_values, region_pair,
-                          stimulus, response_range, session):
+    def create_scree_plot(self, test_correlation_matrix, train_correlation_matrix,
+                         permutation_correlations, p_values, region_pair,
+                         stimulus, response_range, session):
         """
-        Create scree plot showing correlation distributions for each component
+        Create scree plot showing r_bar values and training correlations
 
         Parameters:
         -----------
-        correlation_matrix : np.ndarray
-            Correlation values for each component across CV folds
+        test_correlation_matrix : np.ndarray
+            Test correlation values for each component across CV folds
+        train_correlation_matrix : np.ndarray
+            Training correlation values for each component across CV folds
+        permutation_correlations : np.ndarray
+            Distribution of permuted correlations for each component
         p_values : np.ndarray
             P-values for each component
         region_pair : str
@@ -150,52 +226,66 @@ class TwoRegionCCAAnalysis:
         session : str
             Session identifier
         """
-        n_components = correlation_matrix.shape[1]
+        n_components = test_correlation_matrix.shape[1]
 
-        # Create figure
-        fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(12, 10))
+        # Calculate r_bar (average test correlations across folds)
+        r_bar = np.mean(test_correlation_matrix, axis=0)
+        r_bar_train = np.mean(train_correlation_matrix, axis=0)
 
-        # Top panel: Box plots of correlation distributions
-        plot_data = []
-        for comp in range(n_components):
-            for corr_val in correlation_matrix[:, comp]:
-                plot_data.append({
-                    'Component': f'Comp {comp + 1}',
-                    'Correlation': corr_val,
-                    'Component_num': comp + 1
-                })
+        # Create figure with subplots
+        fig, ((ax1, ax2), (ax3, ax4)) = plt.subplots(2, 2, figsize=(16, 12))
 
-        plot_df = pd.DataFrame(plot_data)
-
-        # Create box plot
-        sns.boxplot(data=plot_df, x='Component', y='Correlation', ax=ax1)
+        # Top left: Test r_bar scree plot
+        ax1.plot(range(1, n_components + 1), r_bar, 'bo-', linewidth=2, markersize=8, label='Test r_bar')
         ax1.axhline(y=0, color='red', linestyle='--', alpha=0.7, label='Null hypothesis (r=0)')
-        ax1.set_title(f'CCA Component Correlations: {region_pair}\n'
-                      f'{stimulus} - {response_range} - Session {session}')
-        ax1.set_ylabel('Pearson Correlation')
+        ax1.set_xlabel('CCA Component')
+        ax1.set_ylabel('Average Correlation (r_bar)')
+        ax1.set_title(f'Test Correlations: {region_pair}\n{stimulus} - {response_range} - Session {session}')
         ax1.legend()
+        ax1.grid(True, alpha=0.3)
 
         # Add significance indicators
         for comp in range(n_components):
             if p_values[comp] < 0.05:
-                # Add star above box plot
-                y_pos = correlation_matrix[:, comp].max() + 0.05
-                ax1.text(comp, y_pos, '*', ha='center', va='bottom',
-                         fontsize=16, color='red', weight='bold')
+                ax1.plot(comp + 1, r_bar[comp], 'r*', markersize=15, label='Significant' if comp == 0 else "")
 
-        # Bottom panel: P-values
-        ax2.bar(range(1, n_components + 1), -np.log10(p_values), alpha=0.7)
-        ax2.axhline(y=-np.log10(0.05), color='red', linestyle='--',
-                    label='α = 0.05')
+        # Top right: Training r_bar scree plot
+        ax2.plot(range(1, n_components + 1), r_bar_train, 'go-', linewidth=2, markersize=8, label='Train r_bar')
+        ax2.axhline(y=0, color='red', linestyle='--', alpha=0.7, label='Null hypothesis (r=0)')
         ax2.set_xlabel('CCA Component')
-        ax2.set_ylabel('-log10(p-value)')
-        ax2.set_title('Statistical Significance of Components')
+        ax2.set_ylabel('Average Correlation (r_bar)')
+        ax2.set_title(f'Training Correlations: {region_pair}\n{stimulus} - {response_range} - Session {session}')
         ax2.legend()
+        ax2.grid(True, alpha=0.3)
 
-        # Set x-axis ticks
-        ax1.set_xticks(range(n_components))
-        ax1.set_xticklabels([f'Comp {i + 1}' for i in range(n_components)], rotation=45)
-        ax2.set_xticks(range(1, n_components + 1))
+        # Bottom left: Permutation distributions for first few components
+        n_components_to_show = min(4, n_components)
+        for comp in range(n_components_to_show):
+            ax3.hist(permutation_correlations[:, comp], bins=50, alpha=0.6,
+                    label=f'Comp {comp+1}', density=True)
+            # Mark observed r_bar
+            ax3.axvline(r_bar[comp], color=f'C{comp}', linestyle='-', linewidth=2)
+
+        ax3.set_xlabel('Correlation Value')
+        ax3.set_ylabel('Density')
+        ax3.set_title('Permutation Distributions (First 4 Components)')
+        ax3.legend()
+        ax3.grid(True, alpha=0.3)
+
+        # Bottom right: P-values
+        bars = ax4.bar(range(1, n_components + 1), -np.log10(p_values), alpha=0.7)
+        ax4.axhline(y=-np.log10(0.05), color='red', linestyle='--', label='α = 0.05')
+
+        # Color significant bars differently
+        for i, p_val in enumerate(p_values):
+            if p_val < 0.05:
+                bars[i].set_color('red')
+
+        ax4.set_xlabel('CCA Component')
+        ax4.set_ylabel('-log10(p-value)')
+        ax4.set_title('Statistical Significance (Permutation Test)')
+        ax4.legend()
+        ax4.grid(True, alpha=0.3)
 
         plt.tight_layout()
 
@@ -272,15 +362,25 @@ class TwoRegionCCAAnalysis:
                           f"R1: {region1_data.shape[1]} neurons, R2: {region2_data.shape[1]} neurons")
 
                     # Run CCA cross-validation
-                    correlation_matrix = self.run_cca_cross_validation(region1_data, region2_data)
+                    test_correlation_matrix, train_correlation_matrix = self.run_cca_cross_validation(
+                        region1_data, region2_data)
 
-                    # Statistical testing
-                    significant_components, p_values = self.statistical_test_components(correlation_matrix)
+                    # Calculate r_bar (average across folds)
+                    r_bar = np.mean(test_correlation_matrix, axis=0)
+                    r_bar_train = np.mean(train_correlation_matrix, axis=0)
+
+                    # Run permutation test
+                    permutation_correlations = self.permutation_test(region1_data, region2_data)
+
+                    # Statistical testing using permutation results
+                    significant_components, p_values = self.permutation_test_components(
+                        r_bar, permutation_correlations)
 
                     # Create scree plot
                     region_pair = f"{region1_name}_vs_{region2_name}"
-                    self.create_scree_plot(correlation_matrix, p_values, region_pair,
-                                           stimulus, response_range, session)
+                    self.create_scree_plot(test_correlation_matrix, train_correlation_matrix,
+                                         permutation_correlations, p_values, region_pair,
+                                         stimulus, response_range, session)
 
                     # Store results
                     result = {
@@ -291,15 +391,18 @@ class TwoRegionCCAAnalysis:
                         'response_range': response_range,
                         'session': session,
                         'significant_components': significant_components,
-                        'total_components': correlation_matrix.shape[1],
-                        'mean_correlations': correlation_matrix.mean(axis=0),  # Averaging across folds, so ends up being size of n_components
-                        'std_correlations': correlation_matrix.std(axis=0),
-                        'p_values': p_values
+                        'total_components': test_correlation_matrix.shape[1],
+                        'r_bar': r_bar,  # Average test correlations
+                        'r_bar_train': r_bar_train,  # Average training correlations
+                        'test_correlations_std': test_correlation_matrix.std(axis=0),
+                        'train_correlations_std': train_correlation_matrix.std(axis=0),
+                        'p_values': p_values,
+                        'permutation_correlations': permutation_correlations
                     }
                     results.append(result)
 
-                    print(
-                        f"Found {significant_components} significant components out of {correlation_matrix.shape[1]} total")
+                    print(f"Found {significant_components} significant components out of "
+                          f"{test_correlation_matrix.shape[1]} total")
 
         return results
 
@@ -331,15 +434,38 @@ class TwoRegionCCAAnalysis:
             pair_results = self.analyze_region_pair(region1, region2)
             all_results.extend(pair_results)
 
-        # Convert to DataFrame and save
-        results_df = pd.DataFrame(all_results)
+        # Convert to DataFrame and save (excluding large arrays)
+        results_for_df = []
+        for result in all_results:
+            result_copy = result.copy()
+            # Remove large arrays for CSV storage
+            result_copy.pop('permutation_correlations', None)
+            results_for_df.append(result_copy)
+
+        results_df = pd.DataFrame(results_for_df)
 
         # Save detailed results
         results_df.to_csv(os.path.join(self.output_dir, "cca_two_region_results.csv"), index=False)
         results_df.to_feather(os.path.join(self.output_dir, "cca_two_region_results.feather"))
 
-        # Create summary plot
+        # Save full results with arrays as pickle
+        import pickle
+        with open(os.path.join(self.output_dir, "cca_two_region_results_full.pkl"), 'wb') as f:
+            pickle.dump(all_results, f)
+
+        # Create summary plots
         self.create_summary_plots(results_df)
+
+        # Create new detailed summary visualizations
+        print("Creating detailed summary visualizations...")
+        self.create_three_panel_summary(results_df)
+        summary_table = self.create_detailed_summary_table(results_df)
+        self.create_heatmap_summary(results_df)
+
+        print(f"Summary table shape: {summary_table.shape}")
+        print("Top 10 conditions by average significant components:")
+        top_conditions = summary_table.nlargest(10, 'significant_components_mean')
+        print(top_conditions[['stimulus', 'response_range', 'region_pair', 'significant_components_mean']])
 
         return results_df
 
@@ -351,7 +477,7 @@ class TwoRegionCCAAnalysis:
         plt.figure(figsize=(15, 8))
         sns.boxplot(data=results_df, x='region_pair', y='significant_components')
         plt.xticks(rotation=45, ha='right')
-        plt.title('Number of Significant CCA Components by Region Pair')
+        plt.title('Number of Significant CCA Components by Region Pair (Permutation Test)')
         plt.ylabel('Number of Significant Components')
         plt.tight_layout()
         plt.savefig(os.path.join(self.output_dir, "summary_significant_components.png"),
@@ -364,7 +490,7 @@ class TwoRegionCCAAnalysis:
             sns.boxplot(data=results_df, x='region_pair', y='significant_components',
                         hue='stimulus')
             plt.xticks(rotation=45, ha='right')
-            plt.title('Number of Significant CCA Components by Region Pair and Stimulus')
+            plt.title('Number of Significant CCA Components by Region Pair and Stimulus (Permutation Test)')
             plt.ylabel('Number of Significant Components')
             plt.legend(bbox_to_anchor=(1.05, 1), loc='upper left')
             plt.tight_layout()
@@ -372,10 +498,175 @@ class TwoRegionCCAAnalysis:
                         dpi=300, bbox_inches='tight')
             plt.show()
 
+    def create_three_panel_summary(self, results_df):
+        """
+        Create three-panel summary plot showing significant components by stimulus, response range, and region pair
+
+        Parameters:
+        -----------
+        results_df : pd.DataFrame
+            Results dataframe from the CCA analysis
+        """
+        # Get unique values
+        unique_stimuli = sorted(results_df['stimulus'].unique())
+        unique_response_ranges = sorted(results_df['response_range'].unique())
+        unique_region_pairs = sorted(results_df['region_pair'].unique())
+
+        # Create color palette for region pairs
+        colors = plt.cm.Set3(np.linspace(0, 1, len(unique_region_pairs)))
+        region_pair_colors = dict(zip(unique_region_pairs, colors))
+
+        # Create figure with three panels
+        fig, axes = plt.subplots(1, 3, figsize=(18, 6), sharey=True)
+
+        # Set bar width for grouped bars
+        bar_width = 0.8 / len(unique_region_pairs)
+
+        for i, stimulus in enumerate(unique_stimuli):
+            ax = axes[i]
+
+            # Filter data for this stimulus
+            stimulus_data = results_df[results_df['stimulus'] == stimulus]
+
+            # Create grouped bar plot
+            x_positions = np.arange(len(unique_response_ranges))
+
+            for j, region_pair in enumerate(unique_region_pairs):
+                # Get data for this region pair
+                pair_data = stimulus_data[stimulus_data['region_pair'] == region_pair]
+
+                # Calculate mean and std for each response range
+                means = []
+                stds = []
+
+                for response_range in unique_response_ranges:
+                    range_data = pair_data[pair_data['response_range'] == response_range]
+                    if len(range_data) > 0:
+                        means.append(range_data['significant_components'].mean())
+                        stds.append(range_data['significant_components'].std())
+                    else:
+                        means.append(0)
+                        stds.append(0)
+
+                # Plot bars
+                x_pos = x_positions + j * bar_width - (len(unique_region_pairs) - 1) * bar_width / 2
+                bars = ax.bar(x_pos, means, bar_width, yerr=stds,
+                              color=region_pair_colors[region_pair],
+                              alpha=0.7, label=region_pair,
+                              capsize=3)
+
+                # Add value labels on bars
+                for k, (bar, mean) in enumerate(zip(bars, means)):
+                    if mean > 0:
+                        ax.text(bar.get_x() + bar.get_width() / 2, bar.get_height() + stds[k] + 0.1,
+                                f'{mean:.1f}', ha='center', va='bottom', fontsize=8)
+
+            # Customize subplot
+            ax.set_xlabel('Response Range', fontsize=12)
+            if i == 0:
+                ax.set_ylabel('Number of Significant Components', fontsize=12)
+            ax.set_title(f'{stimulus}', fontsize=14, fontweight='bold')
+            ax.set_xticks(x_positions)
+            ax.set_xticklabels(unique_response_ranges)
+            ax.grid(True, alpha=0.3, axis='y')
+
+            # Add legend only to the last subplot to avoid clutter
+            if i == len(unique_stimuli) - 1:
+                ax.legend(bbox_to_anchor=(1.05, 1), loc='upper left', fontsize=10)
+
+        # Overall title
+        fig.suptitle('CCA Significant Components by Stimulus Type, Response Range, and Region Pair',
+                     fontsize=16, fontweight='bold', y=1.02)
+
+        plt.tight_layout()
+
+        # Save plot
+        plt.savefig(os.path.join(self.output_dir, "three_panel_summary.png"),
+                    dpi=300, bbox_inches='tight')
+        plt.show()
+
+        return fig
+
+    def create_detailed_summary_table(self, results_df):
+        """
+        Create a detailed summary table with statistics for each condition
+
+        Parameters:
+        -----------
+        results_df : pd.DataFrame
+            Results dataframe from the CCA analysis
+
+        Returns:
+        --------
+        summary_table : pd.DataFrame
+            Summary statistics table
+        """
+        # Group by all relevant factors and calculate statistics
+        summary_stats = results_df.groupby(['stimulus', 'response_range', 'region_pair']).agg({
+            'significant_components': ['mean', 'std', 'count', 'max'],
+            'total_components': ['mean', 'std'],
+        }).round(2)
+
+        # Flatten column names
+        summary_stats.columns = ['_'.join(col).strip() for col in summary_stats.columns.values]
+
+        # Reset index to make grouping variables regular columns
+        summary_table = summary_stats.reset_index()
+
+        # Add proportion of significant components
+        summary_table['proportion_significant'] = (
+                summary_table['significant_components_mean'] /
+                summary_table['total_components_mean']
+        ).round(3)
+
+        # Save summary table
+        summary_table.to_csv(os.path.join(self.output_dir, "detailed_summary_table.csv"), index=False)
+
+        return summary_table
+
+    def create_heatmap_summary(self, results_df):
+        """
+        Create heatmap showing average significant components across conditions
+
+        Parameters:
+        -----------
+        results_df : pd.DataFrame
+            Results dataframe from the CCA analysis
+        """
+        # Create pivot table for heatmap
+        for stimulus in results_df['stimulus'].unique():
+            stimulus_data = results_df[results_df['stimulus'] == stimulus]
+
+            # Create pivot table: response_range x region_pair
+            pivot_data = stimulus_data.pivot_table(
+                values='significant_components',
+                index='response_range',
+                columns='region_pair',
+                aggfunc='mean'
+            )
+
+            # Create heatmap
+            plt.figure(figsize=(12, 6))
+            sns.heatmap(pivot_data, annot=True, cmap='viridis', fmt='.1f',
+                        cbar_kws={'label': 'Number of Significant Components'})
+            plt.title(f'Average Significant CCA Components - {stimulus}',
+                      fontsize=14, fontweight='bold')
+            plt.xlabel('Region Pair', fontsize=12)
+            plt.ylabel('Response Range', fontsize=12)
+            plt.xticks(rotation=45, ha='right')
+            plt.tight_layout()
+
+            # Save individual heatmaps
+            safe_stimulus = stimulus.replace(' ', '_').replace('/', '_')
+            plt.savefig(os.path.join(self.output_dir, f"heatmap_summary_{safe_stimulus}.png"),
+                        dpi=300, bbox_inches='tight')
+            plt.show()
+
 
 if __name__ == "__main__":
     # Initialize analysis
-    analyzer = TwoRegionCCAAnalysis(neuron_threshold=40, n_splits=5, random_state=42)
+    analyzer = TwoRegionCCAAnalysis(neuron_threshold=40, n_splits=5, random_state=42,
+                                   n_permutations=100)
 
     # Example: analyze specific region pairs
     # Uncomment and modify these lines to analyze specific pairs:
