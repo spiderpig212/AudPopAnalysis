@@ -376,11 +376,16 @@ class TwoRegionCCAAnalysis:
                     significant_components, p_values = self.permutation_test_components(
                         r_bar, permutation_correlations)
 
+                    # Calculate correlations using only significant components
+                    test_correlations_d, train_correlations_d, mean_correlation_d = (
+                        self.calculate_significant_component_correlations(
+                            region1_data, region2_data, significant_components))
+
                     # Create scree plot
                     region_pair = f"{region1_name}_vs_{region2_name}"
                     self.create_scree_plot(test_correlation_matrix, train_correlation_matrix,
-                                         permutation_correlations, p_values, region_pair,
-                                         stimulus, response_range, session)
+                                           permutation_correlations, p_values, region_pair,
+                                           stimulus, response_range, session)
 
                     # Store results
                     result = {
@@ -392,17 +397,29 @@ class TwoRegionCCAAnalysis:
                         'session': session,
                         'significant_components': significant_components,
                         'total_components': test_correlation_matrix.shape[1],
-                        'r_bar': r_bar,  # Average test correlations
-                        'r_bar_train': r_bar_train,  # Average training correlations
+                        'r_bar': r_bar,  # Average test correlations (all components)
+                        'r_bar_train': r_bar_train,  # Average training correlations (all components)
                         'test_correlations_std': test_correlation_matrix.std(axis=0),
                         'train_correlations_std': train_correlation_matrix.std(axis=0),
                         'p_values': p_values,
-                        'permutation_correlations': permutation_correlations
+                        'permutation_correlations': permutation_correlations,
+                        # New d-component specific metrics
+                        'test_correlations_d': test_correlations_d,
+                        'train_correlations_d': train_correlations_d,
+                        'mean_correlation_d': mean_correlation_d,
+                        'r_bar_d': np.mean(test_correlations_d, axis=0) if test_correlations_d.size > 0 else np.array(
+                            []),
+                        'r_bar_train_d': np.mean(train_correlations_d,
+                                                 axis=0) if train_correlations_d.size > 0 else np.array([])
                     }
                     results.append(result)
 
                     print(f"Found {significant_components} significant components out of "
                           f"{test_correlation_matrix.shape[1]} total")
+                    if significant_components > 0:
+                        print(f"Mean correlation using d={significant_components} components: {mean_correlation_d:.3f}")
+
+        return results
 
         return results
 
@@ -440,6 +457,8 @@ class TwoRegionCCAAnalysis:
             result_copy = result.copy()
             # Remove large arrays for CSV storage
             result_copy.pop('permutation_correlations', None)
+            result_copy.pop('test_correlations_d', None)
+            result_copy.pop('train_correlations_d', None)
             results_for_df.append(result_copy)
 
         results_df = pd.DataFrame(results_for_df)
@@ -462,10 +481,20 @@ class TwoRegionCCAAnalysis:
         summary_table = self.create_detailed_summary_table(results_df)
         self.create_heatmap_summary(results_df)
 
+        # Create d-component specific visualizations
+        print("Creating d-component correlation visualizations...")
+        self.create_d_component_summary_plots(results_df)
+
         print(f"Summary table shape: {summary_table.shape}")
         print("Top 10 conditions by average significant components:")
         top_conditions = summary_table.nlargest(10, 'significant_components_mean')
         print(top_conditions[['stimulus', 'response_range', 'region_pair', 'significant_components_mean']])
+
+        # Summary statistics for d-component correlations
+        if 'mean_correlation_d' in results_df.columns:
+            d_comp_summary = results_df[results_df['significant_components'] > 0]['mean_correlation_d'].describe()
+            print("\nD-component correlation summary:")
+            print(d_comp_summary)
 
         return results_df
 
@@ -535,22 +564,22 @@ class TwoRegionCCAAnalysis:
                 # Get data for this region pair
                 pair_data = stimulus_data[stimulus_data['region_pair'] == region_pair]
 
-                # Calculate mean and std for each response range
+                # Calculate mean and sem for each response range
                 means = []
-                stds = []
+                sems = []
 
                 for response_range in unique_response_ranges:
                     range_data = pair_data[pair_data['response_range'] == response_range]
                     if len(range_data) > 0:
                         means.append(range_data['significant_components'].mean())
-                        stds.append(range_data['significant_components'].std())
+                        sems.append(range_data['significant_components'].std()/(np.sqrt(len(range_data['significant_components']))))
                     else:
                         means.append(0)
-                        stds.append(0)
+                        sems.append(0)
 
                 # Plot bars
                 x_pos = x_positions + j * bar_width - (len(unique_region_pairs) - 1) * bar_width / 2
-                bars = ax.bar(x_pos, means, bar_width, yerr=stds,
+                bars = ax.bar(x_pos, means, bar_width, yerr=sems,
                               color=region_pair_colors[region_pair],
                               alpha=0.7, label=region_pair,
                               capsize=3)
@@ -558,7 +587,7 @@ class TwoRegionCCAAnalysis:
                 # Add value labels on bars
                 for k, (bar, mean) in enumerate(zip(bars, means)):
                     if mean > 0:
-                        ax.text(bar.get_x() + bar.get_width() / 2, bar.get_height() + stds[k] + 0.1,
+                        ax.text(bar.get_x() + bar.get_width() / 2, bar.get_height() + sems[k] + 0.1,
                                 f'{mean:.1f}', ha='center', va='bottom', fontsize=8)
 
             # Customize subplot
@@ -659,6 +688,256 @@ class TwoRegionCCAAnalysis:
             # Save individual heatmaps
             safe_stimulus = stimulus.replace(' ', '_').replace('/', '_')
             plt.savefig(os.path.join(self.output_dir, f"heatmap_summary_{safe_stimulus}.png"),
+                        dpi=300, bbox_inches='tight')
+            plt.show()
+
+    ########## D-component analysis code ##########
+
+    def calculate_significant_component_correlations(self, region1_data, region2_data, n_significant_components):
+        """
+        Calculate correlations using only the first d (significant) components
+
+        Parameters:
+        -----------
+        region1_data : np.ndarray
+            Neural data from region 1 (trials x neurons)
+        region2_data : np.ndarray
+            Neural data from region 2 (trials x neurons)
+        n_significant_components : int
+            Number of significant components to use
+
+        Returns:
+        --------
+        test_correlations_d : np.ndarray
+            Test correlations for significant components only (n_folds, d_components)
+        train_correlations_d : np.ndarray
+            Training correlations for significant components only (n_folds, d_components)
+        mean_correlation_d : float
+            Mean correlation across significant components and folds
+        """
+        if n_significant_components == 0:
+            return np.array([]), np.array([]), 0.0
+
+        n_components = min(region1_data.shape[1], region2_data.shape[1], n_significant_components)
+        kf = KFold(n_splits=self.n_splits, shuffle=True, random_state=self.random_state)
+
+        test_correlations_d = []
+        train_correlations_d = []
+
+        for train_idx, test_idx in kf.split(region1_data):
+            r1_train, r1_test = region1_data[train_idx], region1_data[test_idx]
+            r2_train, r2_test = region2_data[train_idx], region2_data[test_idx]
+
+            # Fit CCA with only significant components
+            cca = CCA(n_components=n_components)
+            cca.fit(r1_train, r2_train)
+
+            # Transform data
+            r1_test_transform, r2_test_transform = cca.transform(r1_test, r2_test)
+            r1_train_transform, r2_train_transform = cca.transform(r1_train, r2_train)
+
+            # Calculate correlations for significant components only
+            test_fold_correlations = []
+            train_fold_correlations = []
+
+            for comp in range(n_components):
+                test_corr = np.corrcoef(r1_test_transform[:, comp], r2_test_transform[:, comp])[0, 1]
+                train_corr = np.corrcoef(r1_train_transform[:, comp], r2_train_transform[:, comp])[0, 1]
+
+                test_fold_correlations.append(test_corr)
+                train_fold_correlations.append(train_corr)
+
+            test_correlations_d.append(test_fold_correlations)
+            train_correlations_d.append(train_fold_correlations)
+
+        test_correlations_d = np.array(test_correlations_d)
+        train_correlations_d = np.array(train_correlations_d)
+
+        # Calculate mean correlation across all significant components and folds
+        mean_correlation_d = np.mean(test_correlations_d) if test_correlations_d.size > 0 else 0.0
+
+        return test_correlations_d, train_correlations_d, mean_correlation_d
+
+    def create_d_component_summary_plots(self, results_df):
+        """
+        Create summary plots showing correlations calculated using only significant (d) components
+
+        Parameters:
+        -----------
+        results_df : pd.DataFrame
+            Results dataframe from the CCA analysis with d-component correlations
+        """
+        # Filter out cases with no significant components
+        filtered_df = results_df[results_df['significant_components'] > 0].copy()
+
+        if len(filtered_df) == 0:
+            print("No significant components found across all conditions. Skipping d-component plots.")
+            return
+
+        # 1. Three-panel plot for d-component correlations
+        self.create_three_panel_d_component_plot(filtered_df)
+
+        # 2. Comparison plot: all components vs d components
+        self.create_comparison_all_vs_d_components(filtered_df)
+
+        # 3. Heatmaps for d-component correlations
+        self.create_d_component_heatmaps(filtered_df)
+
+    def create_three_panel_d_component_plot(self, results_df):
+        """
+        Create three-panel plot showing d-component correlations by stimulus, response range, and region pair
+        """
+        unique_stimuli = sorted(results_df['stimulus'].unique())
+        unique_response_ranges = sorted(results_df['response_range'].unique())
+        unique_region_pairs = sorted(results_df['region_pair'].unique())
+
+        colors = plt.cm.Set3(np.linspace(0, 1, len(unique_region_pairs)))
+        region_pair_colors = dict(zip(unique_region_pairs, colors))
+
+        fig, axes = plt.subplots(1, 3, figsize=(18, 6), sharey=True)
+        bar_width = 0.8 / len(unique_region_pairs)
+
+        for i, stimulus in enumerate(unique_stimuli):
+            ax = axes[i]
+            stimulus_data = results_df[results_df['stimulus'] == stimulus]
+            x_positions = np.arange(len(unique_response_ranges))
+
+            for j, region_pair in enumerate(unique_region_pairs):
+                pair_data = stimulus_data[stimulus_data['region_pair'] == region_pair]
+
+                means = []
+                sems = []
+
+                for response_range in unique_response_ranges:
+                    range_data = pair_data[pair_data['response_range'] == response_range]
+                    if len(range_data) > 0:
+                        means.append(range_data['mean_correlation_d'].mean())
+                        sems.append(range_data['mean_correlation_d'].std()/np.sqrt(len(range_data['mean_correlation_d'])))
+                    else:
+                        means.append(0)
+                        sems.append(0)
+
+                x_pos = x_positions + j * bar_width - (len(unique_region_pairs) - 1) * bar_width / 2
+                bars = ax.bar(x_pos, means, bar_width, yerr=sems,
+                              color=region_pair_colors[region_pair],
+                              alpha=0.7, label=region_pair, capsize=3)
+
+                # Add value labels
+                for k, (bar, mean) in enumerate(zip(bars, means)):
+                    if mean > 0:
+                        ax.text(bar.get_x() + bar.get_width() / 2, bar.get_height() + sems[k] + 0.01,
+                                f'{mean:.2f}', ha='center', va='bottom', fontsize=8)
+
+            ax.set_xlabel('Response Range', fontsize=12)
+            if i == 0:
+                ax.set_ylabel('Mean Correlation (d components only)', fontsize=12)
+            ax.set_title(f'{stimulus}', fontsize=14, fontweight='bold')
+            ax.set_xticks(x_positions)
+            ax.set_xticklabels(unique_response_ranges)
+            ax.grid(True, alpha=0.3, axis='y')
+            ax.set_ylim(0, None)
+
+            if i == len(unique_stimuli) - 1:
+                ax.legend(bbox_to_anchor=(1.05, 1), loc='upper left', fontsize=10)
+
+        fig.suptitle('CCA Correlations Using Only Significant (d) Components',
+                     fontsize=16, fontweight='bold', y=1.02)
+        plt.tight_layout()
+        plt.savefig(os.path.join(self.output_dir, "three_panel_d_components.png"),
+                    dpi=300, bbox_inches='tight')
+        plt.show()
+
+    def create_comparison_all_vs_d_components(self, results_df):
+        """
+        Create comparison plots showing all components vs d components correlations
+        """
+        fig, axes = plt.subplots(2, 2, figsize=(15, 12))
+
+        # Scatter plot: all vs d components
+        ax1 = axes[0, 0]
+        ax1.scatter(results_df['mean_correlation_d'], [np.mean(r_bar) for r_bar in results_df['r_bar']],
+                    alpha=0.6, s=50)
+        ax1.plot([0, 1], [0, 1], 'r--', alpha=0.7, label='Perfect agreement')
+        ax1.set_xlabel('Mean Correlation (d components)', fontsize=12)
+        ax1.set_ylabel('Mean Correlation (all components)', fontsize=12)
+        ax1.set_title('All Components vs D Components Correlation', fontsize=12, fontweight='bold')
+        ax1.legend()
+        ax1.grid(True, alpha=0.3)
+
+        # Difference plot
+        ax2 = axes[0, 1]
+        all_comp_means = [np.mean(r_bar) for r_bar in results_df['r_bar']]
+        differences = np.array(results_df['mean_correlation_d']) - np.array(all_comp_means)
+        ax2.hist(differences, bins=30, alpha=0.7, edgecolor='black')
+        ax2.axvline(0, color='red', linestyle='--', alpha=0.7)
+        ax2.set_xlabel('Difference (d components - all components)', fontsize=12)
+        ax2.set_ylabel('Frequency', fontsize=12)
+        ax2.set_title('Distribution of Correlation Differences', fontsize=12, fontweight='bold')
+        ax2.grid(True, alpha=0.3)
+
+        # Box plot by number of significant components
+        ax3 = axes[1, 0]
+        sig_comp_groups = results_df.groupby('significant_components')['mean_correlation_d'].apply(list)
+        box_data = [group for _, group in sig_comp_groups.items()]
+        box_labels = [f'd={k}' for k in sig_comp_groups.keys()]
+
+        bp = ax3.boxplot(box_data, labels=box_labels, patch_artist=True)
+        for patch in bp['boxes']:
+            patch.set_facecolor('lightblue')
+            patch.set_alpha(0.7)
+
+        ax3.set_xlabel('Number of Significant Components', fontsize=12)
+        ax3.set_ylabel('Mean Correlation (d components)', fontsize=12)
+        ax3.set_title('Correlation by Number of Significant Components', fontsize=12, fontweight='bold')
+        ax3.grid(True, alpha=0.3)
+
+        # Region pair comparison
+        ax4 = axes[1, 1]
+        region_means = results_df.groupby('region_pair')['mean_correlation_d'].mean().sort_values(ascending=True)
+        bars = ax4.barh(range(len(region_means)), region_means.values, alpha=0.7)
+        ax4.set_yticks(range(len(region_means)))
+        ax4.set_yticklabels(region_means.index, fontsize=10)
+        ax4.set_xlabel('Mean Correlation (d components)', fontsize=12)
+        ax4.set_title('Average d-Component Correlation by Region Pair', fontsize=12, fontweight='bold')
+        ax4.grid(True, alpha=0.3, axis='x')
+
+        # Add value labels on bars
+        for i, (bar, val) in enumerate(zip(bars, region_means.values)):
+            ax4.text(val + 0.01, bar.get_y() + bar.get_height() / 2, f'{val:.3f}',
+                     ha='left', va='center', fontsize=9)
+
+        plt.tight_layout()
+        plt.savefig(os.path.join(self.output_dir, "comparison_all_vs_d_components.png"),
+                    dpi=300, bbox_inches='tight')
+        plt.show()
+
+    def create_d_component_heatmaps(self, results_df):
+        """
+        Create heatmaps showing d-component correlations across conditions
+        """
+        for stimulus in results_df['stimulus'].unique():
+            stimulus_data = results_df[results_df['stimulus'] == stimulus]
+
+            # Create pivot table for heatmap
+            pivot_data = stimulus_data.pivot_table(
+                values='mean_correlation_d',
+                index='response_range',
+                columns='region_pair',
+                aggfunc='mean'
+            )
+
+            plt.figure(figsize=(12, 6))
+            sns.heatmap(pivot_data, annot=True, cmap='viridis', fmt='.3f',
+                        cbar_kws={'label': 'Mean Correlation (d components)'})
+            plt.title(f'Mean d-Component Correlations - {stimulus}',
+                      fontsize=14, fontweight='bold')
+            plt.xlabel('Region Pair', fontsize=12)
+            plt.ylabel('Response Range', fontsize=12)
+            plt.xticks(rotation=45, ha='right')
+            plt.tight_layout()
+
+            safe_stimulus = stimulus.replace(' ', '_').replace('/', '_')
+            plt.savefig(os.path.join(self.output_dir, f"heatmap_d_components_{safe_stimulus}.png"),
                         dpi=300, bbox_inches='tight')
             plt.show()
 
