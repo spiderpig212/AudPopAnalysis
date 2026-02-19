@@ -234,6 +234,22 @@ class FiringRateAnalysis(AnalysisBase):
         else:
             raise ValueError(f"Invalid stimulus type: {stim_type}")
 
+    def get_firing_rate_array(self, region, session, stim, response_range, neuron_threshold, random_state):
+        npz_array = self.return_arrays(stim)
+        brainRegionArray = npz_array['brainRegionArray']
+        sessionArray = npz_array['sessionIDArray']
+        response_range_array = npz_array[f"{response_range}fr"]
+        mask = (brainRegionArray == region) & (sessionArray == session)
+        response_range_array = response_range_array[mask, :].T  # Change to now be [trials, neurons]
+        np.random.seed(random_state)
+        if response_range_array.shape[1] > neuron_threshold:
+            neurons = np.random.choice(response_range_array.shape[1],
+                                          size=neuron_threshold,
+                                          replace=False)
+            filtered_frs = response_range_array[:, neurons]
+
+        return filtered_frs
+
 
 class CCAAnalysis(FiringRateAnalysis):
     """Class for Canonical Correlation Analysis and subspace similarity analysis."""
