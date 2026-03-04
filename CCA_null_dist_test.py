@@ -16,19 +16,22 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 import pandas as pd
 from tqdm import tqdm
+from itertools import combinations
 
 from analysis_class import FiringRateAnalysis
 from Two_region_CCA import TwoRegionCCAAnalysis
 
 
-def calculate_cca_cosine_similarity_with_null(self, session_sig_df, n_null_samples=100):
+def calculate_cca_cosine_similarity_with_null(analyzer, session_sig_df, n_null_samples=100):
     """
-    For each region pair, perform CCA and calculate cosine similarity between
-    the first 'd' components of U (x_weights_) and V (y_weights_) matrices,
-    along with a null distribution for significance testing.
+    Compare CCA projections from the same source region to different target regions
+    within the same session. For example, compare "Primary vs Ventral" and "Primary vs Dorsal"
+    to see how similarly the Primary region projects to different areas.
 
     Parameters:
     -----------
+    analyzer : TwoRegionCCAAnalysis
+        The analyzer instance
     session_sig_df : pandas.DataFrame
         DataFrame with columns: region1, region2, session, significant_components
     n_null_samples : int
@@ -44,50 +47,87 @@ def calculate_cca_cosine_similarity_with_null(self, session_sig_df, n_null_sampl
 
     results = []
 
-    for idx, row in tqdm(session_sig_df.iterrows(), total=len(session_sig_df)):
-        region1 = row['region1']
-        region2 = row['region2']
-        session = row['session']
-        stimulus = row['stimulus']
-        response_range = row['response_range']
-        d_components = int(row['significant_components'])
+    # Group by session and source region (region1) to find pairs
+    grouped = session_sig_df.groupby(['session', 'region1'])
 
-        if d_components == 0:
-            # Skip if no significant components
+    for (session, source_region), group in tqdm(grouped, desc="Processing session-region groups"):
+        # Get all target regions for this source region in this session
+        target_regions = group['region2'].unique()
+
+        if len(target_regions) < 2:
+            # Need at least 2 target regions to compare
             continue
 
-        try:
-            # Get firing rate data for both regions
-            region1_data = self.fr_db.get_firing_rate_array(
-                region1, session, stimulus, response_range, self.neuron_threshold, self.random_state
-            )  # Shape is [trials, neurons]
-            region2_data = self.fr_db.get_firing_rate_array(
-                region2, session, stimulus, response_range, self.neuron_threshold, self.random_state
-            )  # Shape is [trials, neurons]
+        # Get all possible pairs of target regions
+        for target1, target2 in combinations(target_regions, 2):
+            try:
+                # Get data for both region pairs
+                pair1_row = group[group['region2'] == target1].iloc[0]
+                pair2_row = group[group['region2'] == target2].iloc[0]
 
-            if region1_data is None or region2_data is None:
-                print(f"Missing data for {region1} vs {region2}, session {session}")
-                continue
+                d_components1 = int(pair1_row['significant_components'])
+                d_components2 = int(pair2_row['significant_components'])
 
-            # Ensure both datasets have the same number of time points
-            min_timepoints = min(region1_data.shape[0], region2_data.shape[0])
-            X = region1_data[:min_timepoints, :]
-            Y = region2_data[:min_timepoints, :]
+                if d_components1 == 0 or d_components2 == 0:
+                    continue
 
-            # Transpose for CCA (samples x features)
-            # X = region1_data  # Shape: (n_samples, n_neurons_region1)
-            # Y = region2_data  # Shape: (n_samples, n_neurons_region2)
+                # Use the minimum number of components between the two pairs
+                d_components = min(d_components1, d_components2)
 
-            # Fit CCA with d components to get actual similarity
-            cca = CCA(n_components=d_components, max_iter=1000)
-            cca.fit(X, Y)
+                if d_components == 0:
+                    continue
 
-            # Get the first d components of U and V weight matrices
-            U_actual = cca.x_weights_[:, :d_components]  # Shape: (n_neurons_region1, d_components)
-            V_actual = cca.y_weights_[:, :d_components]  # Shape: (n_neurons_region2, d_components)
+                # Get stimulus and response_range info (assuming they're the same for both pairs)
+                stimulus = pair1_row.get('stimulus', 'naturalSound')  # Default fallback
+                response_range = pair1_row.get('response_range', 'sustainedfr')  # Default fallback
 
-            # Calculate actual cosine similarity
-            if U_actual.shape[0] == V_actual.shape[0]:  # Same number of neurons
+                # Load data for first region pair (source_region vs target1)
+                source_data_u = analyzer.fr_db.get_firing_rate_array(
+                    source_region, session, stimulus, response_range, analyzer.neuron_threshold, analyzer.random_state
+                )
+                target1_data_u = analyzer.fr_db.get_firing_rate_array(
+                    target1, session, stimulus, response_range, analyzer.neuron_threshold, analyzer.random_state
+                )
+
+                # Load data for second region pair (source_region vs target2)
+                source_data_v = analyzer.fr_db.get_firing_rate_array(
+                    source_region, session, stimulus, response_range, analyzer.neuron_threshold, analyzer.random_state
+                )
+                target2_data_v = analyzer.fr_db.get_firing_rate_array(
+                    target2, session, stimulus, response_range, analyzer.neuron_threshold, analyzer.random_state
+                )
+
+                if any(data is None for data in [source_data_u, target1_data_u, source_data_v, target2_data_v]):
+                    print(f"Missing data for {source_region} comparisons in session {session}")
+                    continue
+
+                # Ensure consistent trial numbers
+                min_trials_u = min(source_data_u.shape[0], target1_data_u.shape[0])
+                min_trials_v = min(source_data_v.shape[0], target2_data_v.shape[0])
+                min_trials = min(min_trials_u, min_trials_v)
+
+                X_u = source_data_u[:min_trials, :]
+                Y_u = target1_data_u[:min_trials, :]
+                X_v = source_data_v[:min_trials, :]
+                Y_v = target2_data_v[:min_trials, :]
+
+                # Fit CCA for both region pairs
+                cca_u = CCA(n_components=d_components, max_iter=1000)
+                cca_u.fit(X_u, Y_u)
+
+                cca_v = CCA(n_components=d_components, max_iter=1000)
+                cca_v.fit(X_v, Y_v)
+
+                # Get the x_weights (source region projections) from both models
+                U_actual = cca_u.x_weights_[:, :d_components]  # Source region -> target1 projections
+                V_actual = cca_v.x_weights_[:, :d_components]  # Source region -> target2 projections
+
+                # Check if same number of neurons in source region
+                if U_actual.shape[0] != V_actual.shape[0]:
+                    print(f"Different neuron counts for {source_region}: {U_actual.shape[0]} vs {V_actual.shape[0]}")
+                    continue
+
+                # Calculate actual cosine similarity between source region projections
                 actual_similarities = []
                 for i in range(d_components):
                     u_component = U_actual[:, i].reshape(1, -1)
@@ -97,34 +137,31 @@ def calculate_cca_cosine_similarity_with_null(self, session_sig_df, n_null_sampl
 
                 R_actual = np.mean(actual_similarities)
 
-                # Calculate covariance matrices for null distribution
-                # Covariance of region1 data
-                # np.cov assumes observations are in the columns so I think we need to transpose again
-                cov_region1 = np.cov(X.T)  # Shape: (n_neurons_region1, n_neurons_region1)
-                # Covariance of region2 data
-                cov_region2 = np.cov(Y.T)  # Shape: (n_neurons_region2, n_neurons_region2)
+                # Calculate covariance matrix for the source region (same for both pairs)
+                # Use the data from the first pair (X_u) as reference
+                cov_source = np.cov(X_u.T)  # Shape: (n_neurons_source, n_neurons_source)
 
                 # Generate null distribution
                 null_similarities = []
 
                 for null_iter in range(n_null_samples):
-                    # Sample d vectors from multivariate normal distribution for region1
+                    # Sample d vectors from multivariate normal distribution for source region
+                    # Generate two independent sets of random vectors
                     U_hat = np.random.multivariate_normal(
-                        mean=np.zeros(cov_region1.shape[0]),
-                        cov=cov_region1,
+                        mean=np.zeros(cov_source.shape[0]),
+                        cov=cov_source,
                         size=d_components
-                    ).T  # Shape: (n_neurons_region1, d_components)
+                    ).T  # Shape: (n_neurons_source, d_components)
 
-                    # Sample d vectors from multivariate normal distribution for region2
                     V_hat = np.random.multivariate_normal(
-                        mean=np.zeros(cov_region2.shape[0]),
-                        cov=cov_region2,
+                        mean=np.zeros(cov_source.shape[0]),
+                        cov=cov_source,
                         size=d_components
-                    ).T  # Shape: (n_neurons_region2, d_components)
+                    ).T  # Shape: (n_neurons_source, d_components)
 
                     # QR decomposition to orthogonalize
-                    U_null, _ = np.linalg.qr(U_hat)  # Shape: (n_neurons_region1, d_components)
-                    V_null, _ = np.linalg.qr(V_hat)  # Shape: (n_neurons_region2, d_components)
+                    U_null, _ = np.linalg.qr(U_hat)  # Shape: (n_neurons_source, d_components)
+                    V_null, _ = np.linalg.qr(V_hat)  # Shape: (n_neurons_source, d_components)
 
                     # Calculate cosine similarity for this null sample
                     null_cos_similarities = []
@@ -137,11 +174,10 @@ def calculate_cca_cosine_similarity_with_null(self, session_sig_df, n_null_sampl
                     R_null = np.mean(null_cos_similarities)
                     null_similarities.append(R_null)
 
-                # Calculate p-value (percentage of null values >= actual value)
+                # Calculate p-value and statistics
                 null_similarities = np.array(null_similarities)
                 p_value = (np.sum(null_similarities >= R_actual) + 1) / (n_null_samples + 1)
 
-                # Calculate null distribution statistics
                 null_mean = np.mean(null_similarities)
                 null_std = np.std(null_similarities)
                 null_95_percentile = np.percentile(null_similarities, 95)
@@ -149,9 +185,12 @@ def calculate_cca_cosine_similarity_with_null(self, session_sig_df, n_null_sampl
 
                 # Store results
                 results.append({
-                    'region1': region1,
-                    'region2': region2,
+                    'source_region': source_region,
+                    'target1': target1,
+                    'target2': target2,
                     'session': session,
+                    'stimulus': stimulus,
+                    'response_range': response_range,
                     'significant_components': d_components,
                     'R_actual': R_actual,
                     'actual_component_similarities': actual_similarities,
@@ -164,43 +203,58 @@ def calculate_cca_cosine_similarity_with_null(self, session_sig_df, n_null_sampl
                     'is_significant_99': R_actual > null_99_percentile,
                     'null_similarities': null_similarities.tolist(),
                     'U_shape': U_actual.shape,
-                    'V_shape': V_actual.shape
+                    'V_shape': V_actual.shape,
+                    'pair1_components': d_components1,
+                    'pair2_components': d_components2
                 })
 
-            else:
-                print(
-                    f"Different dimensions for {region1} ({U_actual.shape[0]}) vs {region2} ({V_actual.shape[0]}) - skipping")
+            except Exception as e:
+                print(f"Error processing {source_region} -> {target1} vs {target2}, session {session}: {e}")
                 continue
-
-        except Exception as e:
-            print(f"Error processing {region1} vs {region2}, session {session}: {e}")
-            continue
 
     results_df = pd.DataFrame(results)
     return results_df
 
-# Should probably properly do inheritance for adding this, or add both of these to my analysis_class file, but hey
-# monkey patching exists for a reason right?
-TwoRegionCCAAnalysis.calculate_cca_cosine_similarity_with_null = calculate_cca_cosine_similarity_with_null
 
 if __name__ == "__main__":
     # Initialize analysis
     neuron_threshold = 40
     analyzer = TwoRegionCCAAnalysis(neuron_threshold=neuron_threshold, n_splits=5, random_state=42,
-                                   n_permutations=100)
+                                    n_permutations=100)
     fr_db = FiringRateAnalysis(db_suffix="coords_updated")
     file_path = fr_db.figdata_path
 
     significant_df = pd.read_feather(f"{file_path}/CCA_two_region_analysis/cca_primary_auditory_results.feather")
-    session_sig_df = significant_df[significant_df["region2"] != "Primary auditory area"]  # Filter out the primary vs primary results for now
+    session_sig_df = significant_df[
+        significant_df["region2"] != "Primary auditory area"]  # Filter out the primary vs primary results
 
     # Calculate cosine similarities with null distribution
-    null_results = analyzer.calculate_cca_cosine_similarity_with_null(session_sig_df, n_null_samples=1000)
+    print("Starting cross-region projection similarity analysis...")
+    null_results = calculate_cca_cosine_similarity_with_null(analyzer, session_sig_df, n_null_samples=100)
 
-    # Display significant results
-    significant_results = null_results[null_results['is_significant_95']]
-    print(f"Found {len(significant_results)} significant region pairs (p < 0.05)")
-    print(significant_results[['region1', 'region2', 'session', 'R_actual', 'p_value']])
+    # Display results
+    print(f"\nProcessed {len(null_results)} region pair comparisons")
 
-    # Save results
-    null_results.to_feather(f"{analyzer.file_path}/CCA_cosine_similarity_with_null.feather")
+    if len(null_results) > 0:
+        significant_results = null_results[null_results['is_significant_95']]
+        print(f"Found {len(significant_results)} significant projection similarity comparisons (p < 0.05)")
+
+        if len(significant_results) > 0:
+            print("\nSignificant Results:")
+            print(significant_results[['source_region', 'target1', 'target2', 'session', 'R_actual', 'p_value']])
+
+        # Save results
+        null_results.to_feather(f"{file_path}/CCA_cross_region_projection_similarity.feather")
+        print(f"\nResults saved to: {file_path}/CCA_cross_region_projection_similarity.feather")
+    else:
+        print("No valid comparisons found. Check data availability and session groupings.")
+
+""" Example code for potentially averaging across iterations
+# Group by all columns except iteration and session, then average
+grouping_cols = ['region1', 'region2', 'region_pair', 'stimulus', 'response_range', 'analysis_type']
+averaged_results = results_df.groupby(grouping_cols).agg({
+    'significant_components': lambda x: int(np.floor(x.mean())),
+    'mean_correlation_d': 'mean',
+    # Add other columns you want to average
+}).reset_index()
+"""

@@ -14,6 +14,7 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 import pandas as pd
 from tqdm import tqdm
+import pickle
 
 from analysis_class import FiringRateAnalysis
 import studyparams
@@ -203,7 +204,7 @@ class TwoRegionCCAAnalysis:
 
     def create_scree_plot(self, test_correlation_matrix, train_correlation_matrix,
                          permutation_correlations, p_values, region_pair,
-                         stimulus, response_range, session):
+                         stimulus, response_range, session, verbose=True):
         """
         Create scree plot showing r_bar values and training correlations
 
@@ -291,14 +292,16 @@ class TwoRegionCCAAnalysis:
 
         # Save plot
         safe_region_pair = region_pair.replace('_vs_', '_').replace(' ', '_')
-        filename = f"scree_plot_{safe_region_pair}_{stimulus}_{response_range}_session_{session}.png"
+        filename = f"scree_plots/scree_plot_{safe_region_pair}_{stimulus}_{response_range}_session_{session}.png"
         plt.savefig(os.path.join(self.output_dir, filename), dpi=300, bbox_inches='tight')
-        plt.show()
+        if verbose:
+            print(f"Saved scree plot: {filename}")
+            plt.show()
 
         return fig
 
     def analyze_primary_auditory_within_region(self, region1_data, session, stimulus, response_range,
-                                               n_iterations=10):
+                                               n_iterations=10, verbose=True):
         """
         Perform within-region analysis for Primary auditory area by randomly splitting neurons
 
@@ -367,7 +370,8 @@ class TwoRegionCCAAnalysis:
             region_pair = f"Primary_auditory_area_subregion1_vs_subregion2"
             self.create_scree_plot(test_correlation_matrix, train_correlation_matrix,
                                    permutation_correlations, p_values, region_pair,
-                                   stimulus, response_range, f"{session}_iter{iteration + 1}")
+                                   stimulus, response_range, f"{session}_iter{iteration + 1}",
+                                   verbose=verbose)
 
             # Store results for this iteration
             result = {
@@ -404,10 +408,15 @@ class TwoRegionCCAAnalysis:
 
         return iteration_results
 
-    def analyze_region_pair(self, region1_name, region2_name):
+    def analyze_region_pair(self, region1_name, region2_name, n_iterations=10, verbose=True):
         """
         Analyze a specific pair of brain regions across all conditions
         With special handling for Primary auditory area self-comparison
+
+        Parameters:
+        -----------
+        n_iterations : int
+            Number of iterations for sampling neurons (applies to between-region analysis)
         """
         results = []
 
@@ -451,12 +460,12 @@ class TwoRegionCCAAnalysis:
 
                         # Perform within-region analysis with multiple random splits
                         within_region_results = self.analyze_primary_auditory_within_region(
-                            region_data, session, stimulus, response_range, n_iterations=5)
+                            region_data, session, stimulus, response_range, n_iterations=n_iterations, verbose=verbose)
 
                         results.extend(within_region_results)
 
                     else:
-                        # Standard between-region analysis
+                        # Between-region analysis with multiple iterations
                         # Get data for region 1
                         region1_mask = brain_session_array == region1_name
                         region1_data = session_resp_array[region1_mask, :].T
@@ -472,92 +481,117 @@ class TwoRegionCCAAnalysis:
                                   f"(R1: {region1_data.shape[1]}, R2: {region2_data.shape[1]})")
                             continue
 
-                        # Sample neurons if we have more than threshold
-                        np.random.seed(self.random_state)
-                        if region1_data.shape[1] > self.neuron_threshold:
-                            r1_neurons = np.random.choice(region1_data.shape[1],
-                                                          size=self.neuron_threshold,
-                                                          replace=False)
-                            region1_data = region1_data[:, r1_neurons]
-
-                        if region2_data.shape[1] > self.neuron_threshold:
-                            r2_neurons = np.random.choice(region2_data.shape[1],
-                                                          size=self.neuron_threshold,
-                                                          replace=False)
-                            region2_data = region2_data[:, r2_neurons]
-
                         print(f"Session {session}, Response: {response_range} - "
-                              f"R1: {region1_data.shape[1]} neurons, R2: {region2_data.shape[1]} neurons")
+                              f"R1: {region1_data.shape[1]} neurons, R2: {region2_data.shape[1]} neurons, "
+                              f"{n_iterations} iterations")
 
-                        # Run CCA cross-validation
-                        test_correlation_matrix, train_correlation_matrix = self.run_cca_cross_validation(
-                            region1_data, region2_data)
+                        # Perform multiple iterations with different neuron sampling
+                        iteration_results = []
 
-                        # Calculate r_bar (average across folds)
-                        r_bar = np.mean(test_correlation_matrix, axis=0)
-                        r_bar_train = np.mean(train_correlation_matrix, axis=0)
+                        for iteration in range(n_iterations):
+                            # Set seed for reproducibility within each iteration
+                            np.random.seed(self.random_state + iteration)
 
-                        # Run permutation test
-                        permutation_correlations = self.permutation_test(region1_data, region2_data)
+                            # Sample neurons for this iteration
+                            region1_sampled = region1_data.copy()
+                            region2_sampled = region2_data.copy()
 
-                        # Statistical testing using permutation results
-                        significant_components, p_values = self.permutation_test_components(
-                            r_bar, permutation_correlations)
+                            if region1_sampled.shape[1] > self.neuron_threshold:
+                                r1_neurons = np.random.choice(region1_sampled.shape[1],
+                                                              size=self.neuron_threshold,
+                                                              replace=False)
+                                region1_sampled = region1_sampled[:, r1_neurons]
 
-                        # Calculate correlations using only significant components
-                        test_correlations_d, train_correlations_d, mean_correlation_d = (
-                            self.calculate_significant_component_correlations(
-                                region1_data, region2_data, significant_components))
+                            if region2_sampled.shape[1] > self.neuron_threshold:
+                                r2_neurons = np.random.choice(region2_sampled.shape[1],
+                                                              size=self.neuron_threshold,
+                                                              replace=False)
+                                region2_sampled = region2_sampled[:, r2_neurons]
 
-                        # Create scree plot
-                        region_pair = f"{region1_name}_vs_{region2_name}"
-                        self.create_scree_plot(test_correlation_matrix, train_correlation_matrix,
-                                               permutation_correlations, p_values, region_pair,
-                                               stimulus, response_range, session)
+                            print(f"Iteration {iteration + 1}: R1: {region1_sampled.shape[1]} neurons, "
+                                  f"R2: {region2_sampled.shape[1]} neurons")
 
-                        # Store results
-                        result = {
-                            'region1': region1_name,
-                            'region2': region2_name,
-                            'region_pair': region_pair,
-                            'stimulus': stimulus,
-                            'response_range': response_range,
-                            'session': session,
-                            'significant_components': significant_components,
-                            'total_components': test_correlation_matrix.shape[1],
-                            'r_bar': r_bar,
-                            'r_bar_train': r_bar_train,
-                            'test_correlations_std': test_correlation_matrix.std(axis=0),
-                            'train_correlations_std': train_correlation_matrix.std(axis=0),
-                            'p_values': p_values,
-                            'permutation_correlations': permutation_correlations,
-                            'test_correlations_d': test_correlations_d,
-                            'train_correlations_d': train_correlations_d,
-                            'mean_correlation_d': mean_correlation_d,
-                            'r_bar_d': np.mean(test_correlations_d,
-                                               axis=0) if test_correlations_d.size > 0 else np.array([]),
-                            'r_bar_train_d': np.mean(train_correlations_d,
-                                                     axis=0) if train_correlations_d.size > 0 else np.array([]),
-                            'analysis_type': 'between_region'
-                        }
-                        results.append(result)
+                            # Run CCA cross-validation
+                            test_correlation_matrix, train_correlation_matrix = self.run_cca_cross_validation(
+                                region1_sampled, region2_sampled)
 
-                        print(f"Found {significant_components} significant components out of "
-                              f"{test_correlation_matrix.shape[1]} total")
-                        if significant_components > 0:
-                            print(
-                                f"Mean correlation using d={significant_components} components: {mean_correlation_d:.3f}")
+                            # Calculate r_bar (average across folds)
+                            r_bar = np.mean(test_correlation_matrix, axis=0)
+                            r_bar_train = np.mean(train_correlation_matrix, axis=0)
+
+                            # Run permutation test
+                            permutation_correlations = self.permutation_test(region1_sampled, region2_sampled)
+
+                            # Statistical testing using permutation results
+                            significant_components, p_values = self.permutation_test_components(
+                                r_bar, permutation_correlations)
+
+                            # Calculate correlations using only significant components
+                            test_correlations_d, train_correlations_d, mean_correlation_d = (
+                                self.calculate_significant_component_correlations(
+                                    region1_sampled, region2_sampled, significant_components))
+
+                            # Create scree plot for this iteration
+                            region_pair = f"{region1_name}_vs_{region2_name}"
+                            self.create_scree_plot(test_correlation_matrix, train_correlation_matrix,
+                                                   permutation_correlations, p_values, region_pair,
+                                                   stimulus, response_range, f"{session}_iter{iteration + 1}",
+                                                   verbose=verbose)
+
+                            # Store results for this iteration
+                            result = {
+                                'region1': region1_name,
+                                'region2': region2_name,
+                                'region_pair': region_pair,
+                                'stimulus': stimulus,
+                                'response_range': response_range,
+                                'session': f"{session}_iter_{iteration + 1}",
+                                'iteration': iteration + 1,
+                                'region1_neurons': region1_sampled.shape[1],
+                                'region2_neurons': region2_sampled.shape[1],
+                                'significant_components': significant_components,
+                                'total_components': test_correlation_matrix.shape[1],
+                                'r_bar': r_bar,
+                                'r_bar_train': r_bar_train,
+                                'test_correlations_std': test_correlation_matrix.std(axis=0),
+                                'train_correlations_std': train_correlation_matrix.std(axis=0),
+                                'p_values': p_values,
+                                'permutation_correlations': permutation_correlations,
+                                'test_correlations_d': test_correlations_d,
+                                'train_correlations_d': train_correlations_d,
+                                'mean_correlation_d': mean_correlation_d,
+                                'r_bar_d': np.mean(test_correlations_d,
+                                                   axis=0) if test_correlations_d.size > 0 else np.array([]),
+                                'r_bar_train_d': np.mean(train_correlations_d,
+                                                         axis=0) if train_correlations_d.size > 0 else np.array([]),
+                                'analysis_type': 'between_region'
+                            }
+                            iteration_results.append(result)
+
+                            print(f"Iteration {iteration + 1}: Found {significant_components} significant components, "
+                                  f"mean d-component correlation: {mean_correlation_d:.3f}")
+
+                        # Add all iteration results
+                        results.extend(iteration_results)
 
         return results
 
-    def run_analysis(self, region_pairs=None):
+    def run_analysis(self, region_pairs=None, n_iterations=10, verbose=True):
         """
         Run the full analysis for specified region pairs (filtered for Primary auditory area)
         With special handling for Primary auditory area within-region analysis
+
+        Parameters:
+        -----------
+        n_iterations : int
+            Number of iterations for sampling neurons
         """
         # Get available regions
         stim_arrays = self.fr_db.return_arrays(list(self.stim_types)[0])
-        uniq_regions = np.unique(stim_arrays["brainRegionArray"])
+        brain_regions = stim_arrays["brainRegionArray"]
+        # Rename posterior to also be dorsal instead of treating them as separate areas
+        brain_regions[brain_regions == "Posterior auditory area"] = "Dorsal auditory area"
+        uniq_regions = np.unique(brain_regions)
 
         if region_pairs is None:
             # Generate pairs involving Primary auditory area
@@ -578,11 +612,12 @@ class TwoRegionCCAAnalysis:
                 return None
 
         print(f"Analyzing {len(region_pairs)} region pairs involving Primary auditory area...")
+        print(f"Using {n_iterations} iterations per condition")
         print("Note: Primary auditory area vs itself will use within-region split analysis")
 
         all_results = []
         for region1, region2 in region_pairs:
-            pair_results = self.analyze_region_pair(region1, region2)
+            pair_results = self.analyze_region_pair(region1, region2, n_iterations=n_iterations, verbose=verbose)
             all_results.extend(pair_results)
 
         if not all_results:
@@ -606,7 +641,6 @@ class TwoRegionCCAAnalysis:
         results_df.to_feather(os.path.join(self.output_dir, "cca_primary_auditory_results.feather"))
 
         # Save full results with arrays as pickle
-        import pickle
         with open(os.path.join(self.output_dir, "cca_primary_auditory_results_full.pkl"), 'wb') as f:
             pickle.dump(all_results, f)
 
@@ -631,8 +665,8 @@ class TwoRegionCCAAnalysis:
         between_region_results = results_df[results_df.get('analysis_type', '') != 'within_region_split']
 
         print(f"\nAnalysis Summary:")
-        print(f"Within-region analyses (Primary auditory area split): {len(within_region_results)}")
-        print(f"Between-region analyses: {len(between_region_results)}")
+        print(f"Within-region analyses (Primary auditory area split): {len(within_region_results)} total iterations")
+        print(f"Between-region analyses: {len(between_region_results)} total iterations")
 
         if len(within_region_results) > 0:
             within_d_comp = within_region_results[within_region_results['significant_components'] > 0]
@@ -974,7 +1008,7 @@ class TwoRegionCCAAnalysis:
         # Heatmaps for d-component correlations (Primary auditory area only)
         self.create_d_component_heatmaps_primary(filtered_df)
 
-    def create_comparison_all_vs_d_components_primary(self, results_df):
+    def create_comparison_all_vs_d_components_primary(self, results_df, verbose=True):
         """
         Create comparison plots for Primary auditory area showing all vs d components correlations
         """
@@ -1047,7 +1081,8 @@ class TwoRegionCCAAnalysis:
         plt.tight_layout()
         plt.savefig(os.path.join(self.output_dir, "comparison_all_vs_d_primary_auditory.png"),
                     dpi=300, bbox_inches='tight')
-        plt.show()
+        if verbose:
+            plt.show()
 
     def create_d_component_heatmaps_primary(self, results_df):
         """
@@ -1853,7 +1888,7 @@ if __name__ == "__main__":
     # results_df = analyzer.run_analysis(region_pairs)
 
     # Or analyze all possible pairs:
-    results_df = analyzer.run_analysis()
+    results_df = analyzer.run_analysis(n_iterations=5, verbose=False)
 
     print("\nAnalysis complete! Results saved to:", analyzer.output_dir)
     print(f"Analyzed {len(results_df)} conditions across all region pairs")
