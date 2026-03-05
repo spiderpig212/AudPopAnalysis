@@ -1880,7 +1880,7 @@ class TwoRegionCCAAnalysis:
 if __name__ == "__main__":
     # Initialize analysis
     analyzer = TwoRegionCCAAnalysis(neuron_threshold=40, n_splits=5, random_state=42,
-                                   n_permutations=100)
+                                   n_permutations=10)  # TODO: Will want to do with n_permutations=10000 at some point
 
     # Example: analyze specific region pairs
     # Uncomment and modify these lines to analyze specific pairs:
