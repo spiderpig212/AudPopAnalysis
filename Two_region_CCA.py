@@ -380,7 +380,7 @@ class TwoRegionCCAAnalysis:
                 'region_pair': 'Primary_auditory_area_vs_Primary_auditory_area',
                 'stimulus': stimulus,
                 'response_range': response_range,
-                'session': f"{session}_within_region_iter_{iteration + 1}",
+                'session': session,
                 'iteration': iteration + 1,
                 'total_neurons_available': total_neurons,
                 'subregion1_neurons': half_size,
@@ -396,10 +396,9 @@ class TwoRegionCCAAnalysis:
                 'test_correlations_d': test_correlations_d,
                 'train_correlations_d': train_correlations_d,
                 'mean_correlation_d': mean_correlation_d,
-                'r_bar_d': np.mean(test_correlations_d, axis=0) if test_correlations_d.size > 0 else np.array([]),
-                'r_bar_train_d': np.mean(train_correlations_d, axis=0) if train_correlations_d.size > 0 else np.array(
-                    []),
-                'analysis_type': 'within_region_split'
+                'r_max_d': np.max(test_correlations_d) if test_correlations_d.size > 0 else np.array([]),
+                'r_max_train_d': np.max(train_correlations_d) if train_correlations_d.size > 0 else np.array([]),
+                'analysis_type': 'within_region'
             }
             iteration_results.append(result)
 
@@ -432,6 +431,7 @@ class TwoRegionCCAAnalysis:
             # Get stimulus data
             stim_arrays = self.fr_db.return_arrays(stimulus)
             brainRegionArray = stim_arrays["brainRegionArray"]
+            brainRegionArray[brainRegionArray == "Posterior auditory area"] = "Dorsal auditory area"
             sessionArray = stim_arrays["sessionIDArray"]
             uniqSessions = np.unique(sessionArray)
 
@@ -446,7 +446,7 @@ class TwoRegionCCAAnalysis:
                     if is_primary_self_comparison:
                         # Special handling for Primary auditory area self-comparison
                         region_mask = brain_session_array == region1_name
-                        region_data = session_resp_array[region_mask, :].T
+                        region_data = session_resp_array[region_mask, :].T  # Transpose it to be [Trials, Nuerons]
 
                         # Check if we have enough neurons for within-region analysis
                         min_neurons_needed = 2 * self.neuron_threshold
@@ -545,7 +545,7 @@ class TwoRegionCCAAnalysis:
                                 'region_pair': region_pair,
                                 'stimulus': stimulus,
                                 'response_range': response_range,
-                                'session': f"{session}_iter_{iteration + 1}",
+                                'session': session,
                                 'iteration': iteration + 1,
                                 'region1_neurons': region1_sampled.shape[1],
                                 'region2_neurons': region2_sampled.shape[1],
@@ -560,10 +560,8 @@ class TwoRegionCCAAnalysis:
                                 'test_correlations_d': test_correlations_d,
                                 'train_correlations_d': train_correlations_d,
                                 'mean_correlation_d': mean_correlation_d,
-                                'r_bar_d': np.mean(test_correlations_d,
-                                                   axis=0) if test_correlations_d.size > 0 else np.array([]),
-                                'r_bar_train_d': np.mean(train_correlations_d,
-                                                         axis=0) if train_correlations_d.size > 0 else np.array([]),
+                                'r_max_d': np.max(test_correlations_d) if test_correlations_d.size > 0 else np.array([]),
+                                'r_max_train_d': np.max(train_correlations_d) if train_correlations_d.size > 0 else np.array([]),
                                 'analysis_type': 'between_region'
                             }
                             iteration_results.append(result)
