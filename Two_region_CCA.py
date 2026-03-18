@@ -6,6 +6,7 @@ and determines optimal dimensionality using permutation tests.
 """
 
 import os
+import sys
 import numpy as np
 from scipy import stats
 from sklearn.cross_decomposition import CCA
@@ -17,7 +18,6 @@ from tqdm import tqdm
 import pickle
 
 from analysis_class import FiringRateAnalysis
-import studyparams
 from jaratoolbox import settings, celldatabase
 
 

@@ -7,9 +7,10 @@ think on what kind of flexibility I will want to include for the data loading an
 
 import numpy as np
 import os
+import sys
 import pandas as pd
-from jaratoolbox import celldatabase
-import settings
+from jaratoolbox import celldatabase, settings
+# sys.path.append('/gpfs/projects/murraylab/mnardoci/git/jarapubs/2025acpop')  # This line is needed for Talapas for studyparams
 import studyparams
 import funcs
 import matplotlib.pyplot as plt
