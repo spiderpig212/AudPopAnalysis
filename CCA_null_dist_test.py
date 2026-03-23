@@ -93,17 +93,43 @@ def calculate_cca_cosine_similarity_with_null(analyzer, session_sig_df, n_null_s
                         source_data_u = analyzer.fr_db.get_firing_rate_array(
                             source_region, session, stimulus, response_range, analyzer.neuron_threshold, analyzer.random_state
                         )
-                        target1_data_u = analyzer.fr_db.get_firing_rate_array(
-                            target1, session, stimulus, response_range, analyzer.neuron_threshold, analyzer.random_state
-                        )
+                        if target1 == 'Dorsal auditory area':
+                            try:
+                                target1_data_u = analyzer.fr_db.get_firing_rate_array(
+                                    target1, session, stimulus, response_range, analyzer.neuron_threshold, analyzer.random_state
+                                )
+                            except UnboundLocalError:  # This is for handling cases where we renamed posterior to dorsal
+                                target1_data_u = analyzer.fr_db.get_firing_rate_array(
+                                    'Posterior auditory area', session, stimulus, response_range, analyzer.neuron_threshold,
+                                    analyzer.random_state
+                                )
+                        else:
+                            target1_data_u = analyzer.fr_db.get_firing_rate_array(
+                                target1, session, stimulus, response_range, analyzer.neuron_threshold,
+                                analyzer.random_state
+                            )
 
                         # Load data for second region pair (source_region vs target2)
                         source_data_v = analyzer.fr_db.get_firing_rate_array(
                             source_region, session, stimulus, response_range, analyzer.neuron_threshold, analyzer.random_state
                         )
-                        target2_data_v = analyzer.fr_db.get_firing_rate_array(
-                            target2, session, stimulus, response_range, analyzer.neuron_threshold, analyzer.random_state
-                        )
+                        if target2 == 'Dorsal auditory area':
+                            try:
+                                target2_data_v = analyzer.fr_db.get_firing_rate_array(
+                                    target2, session, stimulus, response_range, analyzer.neuron_threshold,
+                                    analyzer.random_state
+                                )
+                            except UnboundLocalError:  # This is for handling cases where we renamed posterior to dorsal
+                                target2_data_v = analyzer.fr_db.get_firing_rate_array(
+                                    'Posterior auditory area', session, stimulus, response_range,
+                                    analyzer.neuron_threshold,
+                                    analyzer.random_state
+                                )
+                        else:
+                            target2_data_v = analyzer.fr_db.get_firing_rate_array(
+                                target2, session, stimulus, response_range, analyzer.neuron_threshold,
+                                analyzer.random_state
+                            )
 
                         if any(data is None for data in [source_data_u, target1_data_u, source_data_v, target2_data_v]):
                             print(f"Missing data for {source_region} comparisons in session {session}")
@@ -240,11 +266,12 @@ if __name__ == "__main__":
     # Initialize analysis
     neuron_threshold = 40
     analyzer = TwoRegionCCAAnalysis(neuron_threshold=neuron_threshold, n_splits=5, random_state=42,
-                                    n_permutations=10000)
+                                    n_permutations=100)
     fr_db = FiringRateAnalysis(db_suffix="coords_updated")
     file_path = fr_db.figdata_path
 
-    significant_df = pd.read_feather(f"{file_path}/CCA_two_region_analysis/cca_primary_auditory_results.feather")
+    # significant_df = pd.read_feather(f"{file_path}/CCA_two_region_analysis/cca_primary_auditory_results.feather")
+    significant_df = pd.read_csv(f"{file_path}/CCA_two_region_analysis/cca_primary_auditory_results.csv")
     session_sig_df = significant_df # [
     #     significant_df["region2"] != "Primary auditory area"]  # Filter out the primary vs primary results
 
