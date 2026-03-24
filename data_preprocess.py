@@ -6,7 +6,7 @@ parent_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, parent_dir)
 
 import funcs
-import studyparams as params
+import params
 import numpy as np
 from copy import deepcopy
 from jaratoolbox import celldatabase, ephyscore

@@ -4,7 +4,7 @@ import matplotlib.pyplot as plt
 from jaratoolbox import celldatabase, ephyscore
 from copy import deepcopy
 from sklearn.decomposition import PCA
-import studyparams as params
+import params
 from sklearn.linear_model import Ridge
 from sklearn.model_selection import KFold
 from sklearn.preprocessing import StandardScaler
