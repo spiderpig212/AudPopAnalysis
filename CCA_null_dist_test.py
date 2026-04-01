@@ -199,7 +199,7 @@ def calculate_cca_cosine_similarity_with_null(analyzer, session_sig_df, n_null_s
                                 size=d_components_v
                             ).T  # Shape: (n_neurons_source, d_components)
 
-                            # QR decomposition to orthogonalize
+                            # QR decomposition to orthonormalize (ignore the upper triangle, R)
                             U_null, _ = np.linalg.qr(U_hat)  # Shape: (n_neurons_source, d_components)
                             V_null, _ = np.linalg.qr(V_hat)  # Shape: (n_neurons_source, d_components)
 
@@ -221,8 +221,10 @@ def calculate_cca_cosine_similarity_with_null(analyzer, session_sig_df, n_null_s
 
                         # Calculate p-value and statistics
                         null_similarities = np.array(null_similarities)
-                        p_value = (np.sum(null_similarities >= R_actual)) / n_null_samples
-                        p_val_alt = stats.mannwhitneyu(null_similarities, R_actual)[1]
+                        # p_value = (np.sum(null_similarities >= R_actual)) / n_null_samples
+                        null_center = np.mean(null_similarities)
+                        p_value = np.sum(np.abs(null_similarities - null_center) >= np.abs(R_actual - null_center)) / n_null_samples
+                        # p_value = (np.sum(np.abs(null_similarities) >= np.abs(R_actual))) / n_null_samples
 
                         null_mean = np.mean(null_similarities)
                         null_std = np.std(null_similarities)
@@ -244,7 +246,6 @@ def calculate_cca_cosine_similarity_with_null(analyzer, session_sig_df, n_null_s
                             'null_95_percentile': null_95_percentile,
                             'null_99_percentile': null_99_percentile,
                             'p_value': p_value,
-                            'p_val_alt': p_val_alt,
                             'is_significant_95': R_actual > null_95_percentile,
                             'is_significant_99': R_actual > null_99_percentile,
                             'null_similarities': null_similarities.tolist(),
