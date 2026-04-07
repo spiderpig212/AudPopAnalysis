@@ -715,94 +715,6 @@ class TwoRegionCCAAnalysis:
                         dpi=300, bbox_inches='tight')
             plt.show()
 
-    # def create_three_panel_summary(self, results_df):
-    #     """
-    #     Create three-panel summary plot showing significant components by stimulus, response range, and region pair
-    #
-    #     Parameters:
-    #     -----------
-    #     results_df : pd.DataFrame
-    #         Results dataframe from the CCA analysis
-    #     """
-    #     # Get unique values
-    #     unique_stimuli = sorted(results_df['stimulus'].unique())
-    #     unique_response_ranges = sorted(results_df['response_range'].unique())
-    #     unique_region_pairs = sorted(results_df['region_pair'].unique())
-    #
-    #     # Create color palette for region pairs
-    #     colors = plt.cm.Set3(np.linspace(0, 1, len(unique_region_pairs)))
-    #     region_pair_colors = dict(zip(unique_region_pairs, colors))
-    #
-    #     # Create figure with three panels
-    #     fig, axes = plt.subplots(1, 3, figsize=(18, 6), sharey=True)
-    #
-    #     # Set bar width for grouped bars
-    #     bar_width = 0.8 / len(unique_region_pairs)
-    #
-    #     for i, stimulus in enumerate(unique_stimuli):
-    #         ax = axes[i]
-    #
-    #         # Filter data for this stimulus
-    #         stimulus_data = results_df[results_df['stimulus'] == stimulus]
-    #
-    #         # Create grouped bar plot
-    #         x_positions = np.arange(len(unique_response_ranges))
-    #
-    #         for j, region_pair in enumerate(unique_region_pairs):
-    #             # Get data for this region pair
-    #             pair_data = stimulus_data[stimulus_data['region_pair'] == region_pair]
-    #
-    #             # Calculate mean and sem for each response range
-    #             means = []
-    #             sems = []
-    #
-    #             for response_range in unique_response_ranges:
-    #                 range_data = pair_data[pair_data['response_range'] == response_range]
-    #                 if len(range_data) > 0:
-    #                     means.append(range_data['significant_components'].mean())
-    #                     sems.append(range_data['significant_components'].std()/(np.sqrt(len(range_data['significant_components']))))
-    #                 else:
-    #                     means.append(0)
-    #                     sems.append(0)
-    #
-    #             # Plot bars
-    #             x_pos = x_positions + j * bar_width - (len(unique_region_pairs) - 1) * bar_width / 2
-    #             bars = ax.bar(x_pos, means, bar_width, yerr=sems,
-    #                           color=region_pair_colors[region_pair],
-    #                           alpha=0.7, label=region_pair,
-    #                           capsize=3)
-    #
-    #             # Add value labels on bars
-    #             for k, (bar, mean) in enumerate(zip(bars, means)):
-    #                 if mean > 0:
-    #                     ax.text(bar.get_x() + bar.get_width() / 2, bar.get_height() + sems[k] + 0.1,
-    #                             f'{mean:.1f}', ha='center', va='bottom', fontsize=8)
-    #
-    #         # Customize subplot
-    #         ax.set_xlabel('Response Range', fontsize=12)
-    #         if i == 0:
-    #             ax.set_ylabel('Number of Significant Components', fontsize=12)
-    #         ax.set_title(f'{stimulus}', fontsize=14, fontweight='bold')
-    #         ax.set_xticks(x_positions)
-    #         ax.set_xticklabels(unique_response_ranges)
-    #         ax.grid(True, alpha=0.3, axis='y')
-    #
-    #         # Add legend only to the last subplot to avoid clutter
-    #         if i == len(unique_stimuli) - 1:
-    #             ax.legend(bbox_to_anchor=(1.05, 1), loc='upper left', fontsize=10)
-    #
-    #     # Overall title
-    #     fig.suptitle('CCA Significant Components by Stimulus Type, Response Range, and Region Pair',
-    #                  fontsize=16, fontweight='bold', y=1.02)
-    #
-    #     plt.tight_layout()
-    #
-    #     # Save plot
-    #     plt.savefig(os.path.join(self.output_dir, "three_panel_summary.png"),
-    #                 dpi=300, bbox_inches='tight')
-    #     plt.show()
-    #
-    #     return fig
 
     def create_detailed_summary_table(self, results_df):
         """
@@ -991,11 +903,28 @@ class TwoRegionCCAAnalysis:
         if len(filtered_df) == 0:
             print("No significant components found for Primary auditory area comparisons.")
             return
+        # TODO: Use the test_d correlation to calculate first, and mean of first 2-5 components and make plots of all
+        #  as the value column below
+        # Column name is test_correlations_d
+        for d_comps in range(1, 6):
+            for _, row in filtered_df.iterrows():
+                test_correlations_d = row['test_correlations_d']
+                test_subset = test_correlations_d[:d_comps]
+                mean_test_d = np.mean(test_subset) if test_subset.size > 0 else 0.0
+                row[f'test_correlations_d_{d_comps}_comps'] = mean_test_d
+
+            # Create three-panel plot for d-component correlations with statistics
+            self.create_three_panel_summary_with_stats(
+                filtered_df,
+                value_column=f'test_correlations_d_{d_comps}_comps',
+                ylabel='Mean Correlation (d components only)',
+                title_suffix=f' - D-Component Correlations w/ First {d_comps} Components'
+            )
 
         # Create three-panel plot for d-component correlations with statistics
         self.create_three_panel_summary_with_stats(
             filtered_df,
-            value_column='mean_correlation_d',
+            value_column='mean_correlation_d',  # TODO: Could change to only plot the first or average of first 3 correlation values
             ylabel='Mean Correlation (d components only)',
             title_suffix=' - D-Component Correlations'
         )

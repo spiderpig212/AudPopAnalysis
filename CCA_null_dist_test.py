@@ -228,8 +228,9 @@ def calculate_cca_cosine_similarity_with_null(analyzer, session_sig_df, n_null_s
 
                         null_mean = np.mean(null_similarities)
                         null_std = np.std(null_similarities)
-                        null_95_percentile = np.percentile(null_similarities, 95)
-                        null_99_percentile = np.percentile(null_similarities, 99)
+                        # null_95_percentile = np.percentile(null_similarities, 95)
+                        # null_99_percentile = np.percentile(null_similarities, 99)
+                        z = (R_actual - null_mean) / null_std
 
                         # Store results
                         results.append({
@@ -243,11 +244,12 @@ def calculate_cca_cosine_similarity_with_null(analyzer, session_sig_df, n_null_s
                             'R_actual': R_actual,
                             'null_mean': null_mean,
                             'null_std': null_std,
-                            'null_95_percentile': null_95_percentile,
-                            'null_99_percentile': null_99_percentile,
+                            'z_score_diff_from_null': z,
+                            # 'null_95_percentile': null_95_percentile,
+                            # 'null_99_percentile': null_99_percentile,
                             'p_value': p_value,
-                            'is_significant_95': R_actual > null_95_percentile,
-                            'is_significant_99': R_actual > null_99_percentile,
+                            'is_significant_95': p_value < 0.05,
+                            'is_significant_99': p_value < 0.01,
                             'null_similarities': null_similarities.tolist(),
                             'U_shape': U_actual.shape,
                             'V_shape': V_actual.shape,
@@ -267,7 +269,7 @@ if __name__ == "__main__":
     # Initialize analysis
     neuron_threshold = 40
     analyzer = TwoRegionCCAAnalysis(neuron_threshold=neuron_threshold, n_splits=5, random_state=42,
-                                    n_permutations=100)
+                                    n_permutations=10000)
     fr_db = FiringRateAnalysis(db_suffix="coords_updated")
     file_path = fr_db.figdata_path
 

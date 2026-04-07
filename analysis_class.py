@@ -49,7 +49,8 @@ class AnalysisBase:
             "Dorsal auditory area",
             "Posterior auditory area",
             "Primary auditory area",
-            "Ventral auditory area"
+            "Ventral auditory area",
+            "Temporal association areas"
         ]
 
         nCategories = len(studyparams.SOUND_CATEGORIES)

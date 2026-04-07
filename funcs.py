@@ -237,7 +237,7 @@ def calculate_fr_arrays(celldb:pd.DataFrame, stimType:str, stimVar:str, timeRang
         # -- Test if trials from behavior don't match ephys -- Shouldn't matter since I am manually subsetting both above
         if (len(currentStim) > len(eventOnsetTimes)) or \
                 (len(currentStim) < len(eventOnsetTimes) - 1):
-            print(f'[{indRow}] Warning! BevahTrials ({len(currentStim)}) and ' +
+            print(f'[{indRow}] Warning! BehavTrials ({len(currentStim)}) and ' +
                   f'EphysTrials ({len(eventOnsetTimes)})')
             continue
         if len(currentStim) == len(eventOnsetTimes) - 1:
