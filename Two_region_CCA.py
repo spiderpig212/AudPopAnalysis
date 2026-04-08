@@ -396,7 +396,7 @@ class TwoRegionCCAAnalysis:
                 'test_correlations_d': test_correlations_d,
                 'train_correlations_d': train_correlations_d,
                 'mean_correlation_d': mean_correlation_d,
-                'r_max_d': np.max(test_correlations_d) if test_correlations_d.size > 0 else np.array([]),
+                'r_max_d': np.max(test_correlations_d) if test_correlations_d.size > 0 else np.array([]),  # TODO: Choose something else to save if if array is empty
                 'r_max_train_d': np.max(train_correlations_d) if train_correlations_d.size > 0 else np.array([]),
                 'analysis_type': 'within_region'
             }
@@ -622,6 +622,10 @@ class TwoRegionCCAAnalysis:
             print("No results generated. Check neuron thresholds and data availability.")
             return None
 
+        # Save full results with arrays as pickle
+        with open(os.path.join(self.output_dir, "cca_primary_auditory_results_full.pkl"), 'wb') as f:
+            pickle.dump(all_results, f)
+
         # Convert to DataFrame and save (excluding large arrays)
         results_for_df = []
         for result in all_results:
@@ -636,11 +640,14 @@ class TwoRegionCCAAnalysis:
 
         # Save detailed results
         results_df.to_csv(os.path.join(self.output_dir, "cca_primary_auditory_results.csv"), index=False)
-        results_df.to_feather(os.path.join(self.output_dir, "cca_primary_auditory_results.feather"))
+        try:
+            results_df.to_feather(os.path.join(self.output_dir, "cca_primary_auditory_results.feather"))
+        except Exception as e:
+            print(f"Failed to save feather file: {e}")
 
-        # Save full results with arrays as pickle
-        with open(os.path.join(self.output_dir, "cca_primary_auditory_results_full.pkl"), 'wb') as f:
-            pickle.dump(all_results, f)
+        # # Save full results with arrays as pickle
+        # with open(os.path.join(self.output_dir, "cca_primary_auditory_results_full.pkl"), 'wb') as f:
+        #     pickle.dump(all_results, f)
 
         # Create summary plots (now filtered for Primary auditory area)
         self.create_summary_plots(results_df)
@@ -659,8 +666,8 @@ class TwoRegionCCAAnalysis:
         print(f"Summary table shape: {summary_table.shape}")
 
         # Print detailed statistical summary
-        within_region_results = results_df[results_df.get('analysis_type', '') == 'within_region_split']
-        between_region_results = results_df[results_df.get('analysis_type', '') != 'within_region_split']
+        within_region_results = results_df[results_df.get('analysis_type', '') == 'within_region']
+        between_region_results = results_df[results_df.get('analysis_type', '') != 'within_region']
 
         print(f"\nAnalysis Summary:")
         print(f"Within-region analyses (Primary auditory area split): {len(within_region_results)} total iterations")
@@ -1620,8 +1627,8 @@ class TwoRegionCCAAnalysis:
         Create summary comparing within-region vs between-region correlations
         """
         # Separate within-region and between-region results
-        within_region_df = results_df[results_df.get('analysis_type', '') == 'within_region_split'].copy()
-        between_region_df = results_df[results_df.get('analysis_type', '') != 'within_region_split'].copy()
+        within_region_df = results_df[results_df.get('analysis_type', '') == 'within_region'].copy()
+        between_region_df = results_df[results_df.get('analysis_type', '') != 'within_region'].copy()
 
         if len(within_region_df) == 0:
             print("No within-region analysis results found.")
