@@ -636,14 +636,17 @@ class TwoRegionCCAAnalysis:
             result_copy.pop('train_correlations_d', None)
             results_for_df.append(result_copy)
 
-        results_df = pd.DataFrame(results_for_df)
+        results_save_df = pd.DataFrame(results_for_df)
+
 
         # Save detailed results
-        results_df.to_csv(os.path.join(self.output_dir, "cca_primary_auditory_results.csv"), index=False)
+        results_save_df.to_csv(os.path.join(self.output_dir, "cca_primary_auditory_results.csv"), index=False)
         try:
-            results_df.to_feather(os.path.join(self.output_dir, "cca_primary_auditory_results.feather"))
+            results_save_df.to_feather(os.path.join(self.output_dir, "cca_primary_auditory_results.feather"))
         except Exception as e:
             print(f"Failed to save feather file: {e}")
+
+        results_df = pd.DataFrame(all_results)
 
         # # Save full results with arrays as pickle
         # with open(os.path.join(self.output_dir, "cca_primary_auditory_results_full.pkl"), 'wb') as f:
