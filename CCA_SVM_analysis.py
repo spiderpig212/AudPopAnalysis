@@ -62,6 +62,8 @@ for i_stim, stim in enumerate(stim_types):
     uniqSessions = np.unique(sessionArray)
     correlation_data = []
 
+    C_values = np.logspace(-3, 3, 50)
+
     for respRange in response_ranges:
         respArray = stim_arrays[f"{respRange}fr"]
 
@@ -99,58 +101,6 @@ for i_stim, stim in enumerate(stim_types):
                     cca = CCA(n_components=n_components)
                     response_transform_source, response_transform_target = cca.fit_transform(brain_resp_array, brain2_resp_array) # Should be (nTrials, nDims)
 
-                    # if stim == 'pureTones' or stim == 'AM':
-                    #     cv = KFold(n_splits=n_splits, shuffle=True, random_state=42)
-                    #     svm = SVR()
-                    #     scaled_stims = np.log(stimArray)
-                    #     cv_scores = cross_val_score(svm, response_transform_source, scaled_stims, cv=cv, scoring='accuracy')  # TODO: Verify stimArray is same shape as nTrials for source transform
-                    #     chance_level = 1.0 / len(uniqStims)
-                    #
-                    #     # Store decision boundary data from first fold for visualization
-                    #     boundary_key = f"{stim}_{respRange}_{brainRegion}_vs_{brainRegion2}_{session}"
-                    #     if boundary_key not in decision_boundaries_data:
-                    #         # Get first fold data for decision boundary visualization
-                    #         fold_iterator = cv.split(response_transform_source, scaled_stims)
-                    #         train_idx, test_idx = next(fold_iterator)
-                    #         X_train_fold = response_transform_source[train_idx]
-                    #         y_train_fold = scaled_stims[train_idx]
-                    #         X_test_fold = response_transform_source[test_idx]
-                    #         y_test_fold = scaled_stims[test_idx]
-                    #
-                    #         # Fit SVM on first fold
-                    #         svm_boundary = SVR()
-                    #         svm_boundary.fit(X_train_fold, y_train_fold)
-                    #         y_pred_fold = svm_boundary.predict(X_test_fold)
-                    #
-                    #         decision_boundaries_data[boundary_key] = {
-                    #             'X_train': X_train_fold,
-                    #             'y_train': y_train_fold,
-                    #             'X_test': X_test_fold,
-                    #             'y_test': y_test_fold,
-                    #             'y_pred': y_pred_fold,
-                    #             'svm_model': svm_boundary,
-                    #             'region_pair': f"{brainRegion}_vs_{brainRegion2}",
-                    #             'stim_type': stim,
-                    #             'response_range': respRange,
-                    #             'session': session
-                    #         }
-                    #
-                    #     correlation_data.append({
-                    #         'region_pair': f"{brainRegion}_vs_{brainRegion2}",
-                    #         'region1': brainRegion,
-                    #         'region2': brainRegion2,
-                    #         'mean_accuracy': np.mean(cv_scores),
-                    #         'std_accuracy': np.std(cv_scores),
-                    #         'cv_scores': cv_scores,
-                    #         'n_trials': len(brain_resp_array),
-                    #         'n_classes': len(uniqStims),
-                    #         'chance_level': chance_level,
-                    #         'response_range': respRange,
-                    #         'stimulus': stim,
-                    #         'session': session
-                    #     })
-                    #
-                    # elif stim == 'naturalSound':
                     if stim == 'naturalSound' or stim == 'AM' or stim == 'pureTones':
                         # Natural sounds can't be linearized, so we must instead do pairwise A vs B SVM fits and store accuracies in matrix
                         cv = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=42)
@@ -158,23 +108,57 @@ for i_stim, stim in enumerate(stim_types):
                             for stim_idx2, stim_val2 in enumerate(uniqStims):
                                 if stim_idx == stim_idx2:
                                     continue
-                                svm_cca = SVC(C=1.0, random_state=42)
-                                svm = SVC(C=1.0, random_state=42)
                                 stim_mask = stimArray == stim_val
                                 stim_mask2 = stimArray == stim_val2
-                                combined_mask = stim_mask | stim_mask2  # We want the trials for both
+                                combined_mask = stim_mask | stim_mask2
                                 combined_resp_array_source = response_transform_source[combined_mask, :]
                                 combined_resp_array_target = response_transform_target[combined_mask, :]
                                 combined_masked_resp_array = brain_resp_array[combined_mask, :]
                                 masked_stims = stimArray[combined_mask].astype(int)
-                                # TODO: Check to make sure they are same length
-                                cv_scores = cross_val_score(svm_cca, combined_resp_array_source, masked_stims, cv=cv, scoring='accuracy')
-                                chance_level = 0.5  # Binary classification
-                                cv_scores_untransformed = cross_val_score(svm, combined_masked_resp_array, masked_stims, cv=cv, scoring='accuracy')
 
-                                # Store decision boundary data for natural sounds (first pair only)
-                                boundary_key = f"{stim}_{respRange}_{brainRegion}_vs_{brainRegion2}_{session}_{stim_val}_{stim_val2}"
-                                if boundary_key not in decision_boundaries_data and len(decision_boundaries_data) < 5:  # Limit storage
+                                C_results = []
+                                for C_val in C_values:
+                                    svm_cca = SVC(C=C_val, random_state=42)
+                                    svm = SVC(C=C_val, random_state=42)
+                                    cv_scores = cross_val_score(svm_cca, combined_resp_array_source, masked_stims,
+                                                                cv=cv, scoring='accuracy')
+                                    chance_level = 0.5  # Binary classification
+                                    cv_scores_untransformed = cross_val_score(svm, combined_masked_resp_array,
+                                                                              masked_stims, cv=cv, scoring='accuracy')
+                                    C_results.append({
+                                        'C': C_val,
+                                        'cv_scores_cca': cv_scores,
+                                        'cv_scores': cv_scores_untransformed,
+                                        'mean_accuracy_cca': np.mean(cv_scores),
+                                        'mean_accuracy': np.mean(cv_scores_untransformed),
+                                        'std_accuracy_cca': np.std(cv_scores),
+                                        'std_accuracy': np.std(cv_scores_untransformed),
+                                    })
+
+                                # Select the result with the highest mean CCA accuracy
+                                best = max(C_results, key=lambda x: x['mean_accuracy_cca'])
+                                best_C_val = best['C']
+
+                                # Plotting the hyper parameter sweep
+                                plt.figure(figsize=(10, 6))
+                                plt.subplot(1, 2, 1)
+                                plt.plot(C_values, best['mean_accuracy_cca'], 'bo-')
+                                plt.xlabel('C')
+                                plt.ylabel('Mean Accuracy')
+                                plt.title('Hyperparameter Sweep for C')
+                                plt.subplot(1, 2, 2)
+                                plt.plot(C_values, best['std_accuracy_cca'], 'bo-')
+                                plt.xlabel('C')
+                                plt.ylabel('Standard Deviation of Accuracy')
+                                plt.title('Hyperparameter Sweep for C')
+                                plt.tight_layout()
+                                plt.savefig(f"{file_path}/CCA_SVM_C_plots/CCA_SVM_hyperparameter_sweep_{session}_{stim}_{respRange}.png")
+                                plt.show()
+                                plt.close()
+
+                                # Store decision boundary data using the best C
+                                boundary_key = f"{stim}_{respRange}_{brainRegion}_vs_{brainRegion2}_{session}_{stim_val}_{stim_val2}_C{best_C_val}"
+                                if boundary_key not in decision_boundaries_data and len(decision_boundaries_data) < 5:
                                     fold_iterator = cv.split(combined_resp_array_source, masked_stims)
                                     train_idx, test_idx = next(fold_iterator)
                                     X_train_fold = combined_resp_array_source[train_idx]
@@ -182,7 +166,7 @@ for i_stim, stim in enumerate(stim_types):
                                     X_test_fold = combined_resp_array_source[test_idx]
                                     y_test_fold = masked_stims[test_idx]
 
-                                    svm_boundary = SVC(C=1.0, random_state=42)
+                                    svm_boundary = SVC(C=best_C_val, random_state=42)
                                     svm_boundary.fit(X_train_fold, y_train_fold)
                                     y_pred_fold = svm_boundary.predict(X_test_fold)
 
@@ -197,26 +181,28 @@ for i_stim, stim in enumerate(stim_types):
                                         'stim_type': stim,
                                         'response_range': respRange,
                                         'session': session,
-                                        'stim_pair': (stimVals[int(stim_val)], stimVals[int(stim_val2)])
+                                        'stim_pair': (stimVals[int(stim_val)], stimVals[int(stim_val2)]),
+                                        'C': best_C_val
                                     }
 
                                 correlation_data.append({
                                     'region_pair': f"{brainRegion}_vs_{brainRegion2}",
                                     'region1': brainRegion,
                                     'region2': brainRegion2,
-                                    'mean_accuracy_cca': np.mean(cv_scores),
-                                    'mean_accuracy': np.mean(cv_scores_untransformed),
-                                    'std_accuracy_cca': np.std(cv_scores),
-                                    'std_accuracy': np.std(cv_scores_untransformed),
-                                    'cv_scores_cca': cv_scores,
-                                    'cv_scores': cv_scores_untransformed,
+                                    'mean_accuracy_cca': best['mean_accuracy_cca'],
+                                    'mean_accuracy': best['mean_accuracy'],
+                                    'std_accuracy_cca': best['std_accuracy_cca'],
+                                    'std_accuracy': best['std_accuracy'],
+                                    'cv_scores_cca': best['cv_scores_cca'],
+                                    'cv_scores': best['cv_scores'],
                                     'n_trials_cca': len(combined_resp_array_source),
-                                    'n_classes': 2,  # Binary classification
+                                    'n_classes': 2,
                                     'stim_pair': (stim_val, stim_val2),
                                     'chance_level': chance_level,
                                     'response_range': respRange,
                                     'stimulus': stim,
-                                    'session': session
+                                    'session': session,
+                                    'C': best_C_val
                                 })
 
     df_correlations = pd.DataFrame(correlation_data)

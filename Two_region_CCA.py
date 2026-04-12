@@ -917,18 +917,18 @@ class TwoRegionCCAAnalysis:
         #  as the value column below
         # Column name is test_correlations_d
         for d_comps in range(1, 6):
-            for _, row in filtered_df.iterrows():
+            for row_i, row in filtered_df.iterrows():
                 test_correlations_d = row['test_correlations_d']
-                test_subset = test_correlations_d[:d_comps]
+                test_subset = test_correlations_d[:, :d_comps]
                 mean_test_d = np.mean(test_subset) if test_subset.size > 0 else 0.0
-                row[f'test_correlations_d_{d_comps}_comps'] = mean_test_d
+                filtered_df.loc[row_i, f'test_correlations_d_{d_comps}_comps'] = mean_test_d
 
             # Create three-panel plot for d-component correlations with statistics
             self.create_three_panel_summary_with_stats(
                 filtered_df,
                 value_column=f'test_correlations_d_{d_comps}_comps',
                 ylabel='Mean Correlation (d components only)',
-                title_suffix=f' - D-Component Correlations w/ First {d_comps} Components'
+                title_suffix=f' - D-Component Correlations - First {d_comps} Components'
             )
 
         # Create three-panel plot for d-component correlations with statistics
@@ -1817,7 +1817,7 @@ class TwoRegionCCAAnalysis:
 if __name__ == "__main__":
     # Initialize analysis
     analyzer = TwoRegionCCAAnalysis(neuron_threshold=40, n_splits=5, random_state=42,
-                                   n_permutations=10)  # TODO: Will want to do with n_permutations=10000 at some point
+                                   n_permutations=10000)  # TODO: Will want to do with n_permutations=10000 at some point
 
     # Example: analyze specific region pairs
     # Uncomment and modify these lines to analyze specific pairs:

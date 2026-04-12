@@ -3,6 +3,8 @@ import numpy as np
 import pandas as pd
 import seaborn as sns
 import pickle
+from scipy import stats
+from statsmodels.stats.multitest import multipletests
 from analysis_class import FiringRateAnalysis
 
 fr_db = FiringRateAnalysis(db_suffix="coords_updated")
@@ -393,6 +395,152 @@ def plot_example_decision_boundaries():
     plt.show()
 
 
+def create_upper_triangle_boxplots():
+    """
+    For each stimulus type, extract the upper-triangle values (excluding diagonal)
+    from the pairwise accuracy matrix, plot them as boxplots grouped by region_pair
+    and response_range, and annotate with one-sample t-test results (mean != 0)
+    corrected for multiple comparisons using Benjamini-Hochberg FDR.
+    """
+    for stim in ["AM", "pureTones", "naturalSound"]:
+        ns_df = pd.read_feather(f"{file_path}/CCA_SVM_{stim}.feather")
+
+        region_pairs = ns_df['region_pair'].unique()
+        response_ranges = ns_df['response_range'].unique()
+
+        # Collect upper-triangle values per (region_pair, response_range) group
+        all_stims = set()
+        for stim_pair in ns_df['stim_pair']:
+            all_stims.update(stim_pair)
+        unique_stims = sorted(list(all_stims))
+        n_stims = len(unique_stims)
+
+        # Build a dict: key -> list of upper-triangle values
+        group_values = {}
+        group_labels = []
+
+        for resp_range in response_ranges:
+            for region_pair in region_pairs:
+                subset = ns_df[
+                    (ns_df['response_range'] == resp_range) &
+                    (ns_df['region_pair'] == region_pair)
+                ]
+
+                if len(subset) == 0:
+                    continue
+
+                # Build accuracy matrix
+                accuracy_matrix = np.full((n_stims, n_stims), np.nan)
+                for _, row in subset.iterrows():
+                    stim1, stim2 = row['stim_pair']
+                    idx1 = unique_stims.index(stim1)
+                    idx2 = unique_stims.index(stim2)
+                    accuracy_matrix[idx1, idx2] = row['mean_accuracy_cca'] - row['mean_accuracy']
+                    accuracy_matrix[idx2, idx1] = row['mean_accuracy_cca'] - row['mean_accuracy']
+                np.fill_diagonal(accuracy_matrix, np.nan)
+
+                # Extract upper triangle (k=1 excludes diagonal)
+                upper_idx = np.triu_indices(n_stims, k=1)
+                upper_vals = accuracy_matrix[upper_idx]
+                upper_vals = upper_vals[~np.isnan(upper_vals)]
+
+                if len(upper_vals) > 0:
+                    label = f"{region_pair}\n{resp_range}"
+                    group_values[label] = upper_vals
+                    group_labels.append(label)
+
+        if not group_labels:
+            print(f"No data found for {stim}, skipping.")
+            continue
+
+        # ── Statistical testing ──────────────────────────────────────────────
+        # One-sample t-test: H0: mean == 0 for each group
+        raw_pvals = []
+        t_stats = []
+        for label in group_labels:
+            vals = group_values[label]
+            if len(vals) >= 2:
+                t_stat, p_val = stats.ttest_1samp(vals, popmean=0)
+            else:
+                t_stat, p_val = np.nan, np.nan
+            t_stats.append(t_stat)
+            raw_pvals.append(p_val)
+
+        # Benjamini-Hochberg FDR correction across all groups
+        valid_mask = ~np.isnan(raw_pvals)
+        corrected_pvals = np.full(len(raw_pvals), np.nan)
+        reject_flags = np.zeros(len(raw_pvals), dtype=bool)
+
+        if valid_mask.sum() > 0:
+            valid_pvals = np.array(raw_pvals)[valid_mask]
+            reject, pvals_corr, _, _ = multipletests(valid_pvals, alpha=0.05, method='fdr_bh')
+            corrected_pvals[valid_mask] = pvals_corr
+            reject_flags[valid_mask] = reject
+
+        # ── Plotting ─────────────────────────────────────────────────────────
+        n_groups = len(group_labels)
+        fig_width = max(6, n_groups * 1.4)
+        fig, ax = plt.subplots(figsize=(fig_width, 6))
+
+        box_data = [group_values[lbl] for lbl in group_labels]
+        bp = ax.boxplot(box_data, patch_artist=True, notch=False,
+                        medianprops=dict(color='black', linewidth=2))
+
+        # Colour boxes by significance
+        colors = ['#d62728' if rej else '#aec7e8' for rej in reject_flags]
+        for patch, color in zip(bp['boxes'], colors):
+            patch.set_facecolor(color)
+
+        # Reference line at 0
+        ax.axhline(y=0, color='black', linestyle='--', linewidth=1, alpha=0.6, label='Mean = 0')
+
+        # Annotate each box with corrected p-value
+        y_max = max(v.max() for v in box_data if len(v) > 0)
+        y_range = y_max - min(v.min() for v in box_data if len(v) > 0)
+        annotation_y = y_max + y_range * 0.05
+
+        for idx, (label, cp, rej) in enumerate(zip(group_labels, corrected_pvals, reject_flags)):
+            x_pos = idx + 1
+            if np.isnan(cp):
+                sig_str = "n/a"
+            elif cp < 0.001:
+                sig_str = "***"
+            elif cp < 0.01:
+                sig_str = "**"
+            elif cp < 0.05:
+                sig_str = "*"
+            else:
+                sig_str = "ns"
+            ax.text(x_pos, annotation_y, sig_str,
+                    ha='center', va='bottom', fontsize=10,
+                    color='#d62728' if rej else 'gray')
+
+        ax.set_xticks(range(1, n_groups + 1))
+        ax.set_xticklabels(group_labels, fontsize=8, rotation=30, ha='right')
+        ax.set_ylabel('CCA Accuracy (upper triangle values)')
+        ax.set_title(f'{stim} — Upper Triangle Accuracy Boxplots\n'
+                     f'(* p<0.05, ** p<0.01, *** p<0.001, BH-corrected; red = significant)')
+
+        # Custom legend
+        from matplotlib.patches import Patch
+        legend_elements = [
+            Patch(facecolor='#d62728', label='Significant (BH-corrected)'),
+            Patch(facecolor='#aec7e8', label='Not significant'),
+        ]
+        ax.legend(handles=legend_elements, loc='upper right')
+
+        plt.tight_layout()
+        plt.savefig(f"{file_path}/upper_triangle_boxplots_{stim}.png", dpi=300, bbox_inches='tight')
+        plt.show()
+        print(f"\n{stim} — Statistical summary (one-sample t-test vs 0, BH-corrected):")
+        print(f"{'Group':<30} {'t-stat':>8} {'raw p':>10} {'corr. p':>10} {'sig':>5}")
+        print("-" * 68)
+        for label, t, rp, cp, rej in zip(group_labels, t_stats, raw_pvals, corrected_pvals, reject_flags):
+            sig_marker = "*" if rej else ""
+            label_flat = label.replace("\n", " | ")
+            print(f"{label_flat:<30} {t:>8.3f} {rp:>10.4f} {cp:>10.4f} {sig_marker:>5}")
+
+
 # Create all visualizations
 # print("Creating box plots for AM and pureTones...")
 # create_boxplots_am_puretones()
@@ -405,7 +553,11 @@ create_heatmap_stims_pairwise()
 print("Creating delta heatmap for stims...")
 create_delta_heatmap_stims_pairwise()
 
+print("Creating upper triangle boxplots with stats...")
+create_upper_triangle_boxplots()
+
 print("Plotting example decision boundaries...")
 plot_example_decision_boundaries()
 
 print("All visualizations completed!")
+
