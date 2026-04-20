@@ -574,6 +574,9 @@ class TwoRegionCCAAnalysis:
                         # Add all iteration results
                         results.extend(iteration_results)
 
+                        with open(os.path.join(self.output_dir, f"cca_primary_auditory_results_partial_intermediate_pairs.pkl"), 'wb') as f:
+                            pickle.dump(results, f)
+
         return results
 
     def run_analysis(self, region_pairs=None, n_iterations=10, verbose=True):
@@ -619,6 +622,8 @@ class TwoRegionCCAAnalysis:
         for region1, region2 in region_pairs:
             pair_results = self.analyze_region_pair(region1, region2, n_iterations=n_iterations, verbose=verbose)
             all_results.extend(pair_results)
+            with open(os.path.join(self.output_dir, "cca_primary_auditory_results_full_intermediate_pairs.pkl"), 'wb') as f:
+                pickle.dump(all_results, f)
 
         if not all_results:
             print("No results generated. Check neuron thresholds and data availability.")
