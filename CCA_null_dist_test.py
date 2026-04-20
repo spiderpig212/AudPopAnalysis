@@ -12,8 +12,6 @@ import numpy as np
 from scipy import stats
 from sklearn.cross_decomposition import CCA
 from sklearn.model_selection import KFold
-import matplotlib.pyplot as plt
-import seaborn as sns
 import pandas as pd
 from tqdm import tqdm
 from itertools import combinations

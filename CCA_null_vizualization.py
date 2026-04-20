@@ -1,8 +1,6 @@
 import os
 import numpy as np
 from scipy import stats
-from sklearn.cross_decomposition import CCA
-from sklearn.model_selection import KFold
 import matplotlib.pyplot as plt
 import seaborn as sns
 import pandas as pd
@@ -12,10 +10,9 @@ from itertools import combinations
 
 from analysis_class import FiringRateAnalysis
 
-# neuron_threshold = 40
-# fr_db = FiringRateAnalysis(db_suffix="coords_updated")
-# file_path = fr_db.figdata_path
-file_path = "/Users/matt/Desktop/Research/Murray/data/ahmadian/figuresdata/2025acpop"
+neuron_threshold = 40
+fr_db = FiringRateAnalysis(db_suffix="coords_updated")
+file_path = fr_db.figdata_path
 
 null_results_df = pd.read_feather(f"{file_path}/CCA_cross_region_projection_similarity.feather")
 stim_types = ['AM', 'pureTones', 'naturalSound']

@@ -3,14 +3,7 @@ This file contains code for running canonical correlation analysis. Compares res
 various brain areas to see if there is any relationship between primary auditory area and either secondary cortical area.
 """
 
-import os
-import sys
 import numpy as np
-from scipy import stats
-from scipy.stats import kruskal
-from scipy.stats import mannwhitneyu
-from statsmodels.stats.multitest import multipletests
-import itertools
 from sklearn.svm import SVC, SVR
 from sklearn.model_selection import StratifiedKFold, cross_val_score, KFold
 from sklearn.preprocessing import StandardScaler
@@ -22,9 +15,6 @@ import seaborn as sns
 import pandas as pd
 
 from analysis_class import AnalysisBase, FiringRateAnalysis
-import studyparams
-from jaratoolbox import settings, celldatabase
-from funcs import add_significance_stars, add_statistical_brackets, participation_ratio
 
 #%% Data import
 response_ranges = ["onset", "sustained", "offset"]
@@ -59,10 +49,12 @@ for i_stim, stim in enumerate(stim_types):
     stimArray = stim_arrays["stimArray"][0, :]  # Stored the trials for each neuron to make sure they were all the same, but only need one now
     uniqStims = np.unique(stimArray)
     uniqRegions = np.unique(brainRegionArray)
+    reorder = np.array([1,0,2,3])
+    uniqRegions = uniqRegions[reorder]
     uniqSessions = np.unique(sessionArray)
     correlation_data = []
 
-    C_values = np.logspace(-3, 3, 50)
+    C_values = np.logspace(-3, 1.2, 20)
 
     for respRange in response_ranges:
         respArray = stim_arrays[f"{respRange}fr"]
@@ -104,7 +96,7 @@ for i_stim, stim in enumerate(stim_types):
                     if stim == 'naturalSound' or stim == 'AM' or stim == 'pureTones':
                         # Natural sounds can't be linearized, so we must instead do pairwise A vs B SVM fits and store accuracies in matrix
                         cv = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=42)
-                        for stim_idx, stim_val in enumerate(uniqStims):
+                        for stim_idx, stim_val in tqdm(enumerate(uniqStims)):
                             for stim_idx2, stim_val2 in enumerate(uniqStims):
                                 if stim_idx == stim_idx2:
                                     continue
@@ -118,8 +110,8 @@ for i_stim, stim in enumerate(stim_types):
 
                                 C_results = []
                                 for C_val in C_values:
-                                    svm_cca = SVC(C=C_val, random_state=42)
-                                    svm = SVC(C=C_val, random_state=42)
+                                    svm_cca = SVC(C=C_val, random_state=42, kernel='linear')
+                                    svm = SVC(C=C_val, random_state=42, kernel='linear')
                                     cv_scores = cross_val_score(svm_cca, combined_resp_array_source, masked_stims,
                                                                 cv=cv, scoring='accuracy')
                                     chance_level = 0.5  # Binary classification
@@ -135,6 +127,8 @@ for i_stim, stim in enumerate(stim_types):
                                         'std_accuracy': np.std(cv_scores_untransformed),
                                     })
 
+                                C_df = pd.DataFrame(C_results)
+
                                 # Select the result with the highest mean CCA accuracy
                                 best = max(C_results, key=lambda x: x['mean_accuracy_cca'])
                                 best_C_val = best['C']
@@ -142,18 +136,18 @@ for i_stim, stim in enumerate(stim_types):
                                 # Plotting the hyper parameter sweep
                                 plt.figure(figsize=(10, 6))
                                 plt.subplot(1, 2, 1)
-                                plt.plot(C_values, best['mean_accuracy_cca'], 'bo-')
+                                plt.plot(C_values, C_df['mean_accuracy_cca'], 'bo-')
                                 plt.xlabel('C')
                                 plt.ylabel('Mean Accuracy')
                                 plt.title('Hyperparameter Sweep for C')
                                 plt.subplot(1, 2, 2)
-                                plt.plot(C_values, best['std_accuracy_cca'], 'bo-')
+                                plt.plot(C_values, C_df['std_accuracy_cca'], 'bo-')
                                 plt.xlabel('C')
                                 plt.ylabel('Standard Deviation of Accuracy')
                                 plt.title('Hyperparameter Sweep for C')
                                 plt.tight_layout()
-                                plt.savefig(f"{file_path}/CCA_SVM_C_plots/CCA_SVM_hyperparameter_sweep_{session}_{stim}_{respRange}.png")
-                                plt.show()
+                                plt.savefig(f"{file_path}/CCA_SVC/CCA_SVC_C_plots/CCA_SVC_hyperparameter_sweep_{session}_{stim}_{respRange}.png")
+                                # plt.show()
                                 plt.close()
 
                                 # Store decision boundary data using the best C
@@ -166,7 +160,9 @@ for i_stim, stim in enumerate(stim_types):
                                     X_test_fold = combined_resp_array_source[test_idx]
                                     y_test_fold = masked_stims[test_idx]
 
-                                    svm_boundary = SVC(C=best_C_val, random_state=42)
+                                    # TODO: Change SVC kernal to linear
+                                    # TODO: Also add in calcualtion for dorsal v ventral and ventral v dorsal
+                                    svm_boundary = SVC(C=best_C_val, random_state=42, kernel='linear')
                                     svm_boundary.fit(X_train_fold, y_train_fold)
                                     y_pred_fold = svm_boundary.predict(X_test_fold)
 

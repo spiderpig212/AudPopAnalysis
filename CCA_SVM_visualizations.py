@@ -128,7 +128,7 @@ def create_boxplots_am_puretones():
                     ax.set_ylabel('Classification Accuracy')
 
         plt.tight_layout()
-        plt.savefig(f"{file_path}/CCA_SVM/boxplots_{stim}.png", dpi=300, bbox_inches='tight')
+        plt.savefig(f"{file_path}/CCA_SVC/boxplots/boxplots_{stim}.png", dpi=300, bbox_inches='tight')
         plt.show()
 
 
@@ -202,7 +202,7 @@ def create_heatmap_natural_sounds():
                 ax.set_ylabel('Stimulus Value')
 
     plt.tight_layout()
-    plt.savefig(f"{file_path}/heatmap_naturalSounds.png", dpi=400, bbox_inches='tight')
+    plt.savefig(f"{file_path}/CCA_SVC/heatmap_naturalSounds.png", dpi=400, bbox_inches='tight')
     plt.show()
 
 def create_heatmap_stims_pairwise():
@@ -284,7 +284,7 @@ def create_heatmap_stims_pairwise():
                     ax.set_ylabel('Stimulus Value')
 
         plt.tight_layout()
-        plt.savefig(f"{file_path}/heatmap_{stim}.png", dpi=400, bbox_inches='tight')
+        plt.savefig(f"{file_path}/CCA_SVC/heatmaps/heatmap_{stim}.png", dpi=400, bbox_inches='tight')
         plt.show()
 
 
@@ -365,7 +365,7 @@ def create_delta_heatmap_stims_pairwise():
                     ax.set_ylabel('Stimulus Value')
 
         plt.tight_layout()
-        plt.savefig(f"{file_path}/heatmap_delta_{stim}.png", dpi=400, bbox_inches='tight')
+        plt.savefig(f"{file_path}/CCA_SVC/delta_heatmaps/heatmap_delta_{stim}.png", dpi=400, bbox_inches='tight')
         plt.show()
 
 def plot_example_decision_boundaries():
@@ -391,7 +391,7 @@ def plot_example_decision_boundaries():
         axes[i].set_visible(False)
 
     plt.tight_layout()
-    plt.savefig(f"{file_path}/decision_boundaries_examples.png", dpi=300, bbox_inches='tight')
+    plt.savefig(f"{file_path}/CCA_SVC/decision_boundaries_examples.png", dpi=300, bbox_inches='tight')
     plt.show()
 
 
@@ -530,7 +530,7 @@ def create_upper_triangle_boxplots():
         ax.legend(handles=legend_elements, loc='upper right')
 
         plt.tight_layout()
-        plt.savefig(f"{file_path}/upper_triangle_boxplots_{stim}.png", dpi=300, bbox_inches='tight')
+        plt.savefig(f"{file_path}/CCA_SVC/Upper_tri/upper_triangle_boxplots_{stim}.png", dpi=300, bbox_inches='tight')
         plt.show()
         print(f"\n{stim} — Statistical summary (one-sample t-test vs 0, BH-corrected):")
         print(f"{'Group':<30} {'t-stat':>8} {'raw p':>10} {'corr. p':>10} {'sig':>5}")

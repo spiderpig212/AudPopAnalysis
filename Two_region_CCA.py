@@ -18,8 +18,6 @@ from tqdm import tqdm
 import pickle
 
 from analysis_class import FiringRateAnalysis
-from jaratoolbox import settings, celldatabase
-
 
 class TwoRegionCCAAnalysis:
     def __init__(self, neuron_threshold=20, n_splits=5, random_state=42, n_permutations=1000):
@@ -141,7 +139,11 @@ class TwoRegionCCAAnalysis:
                 r2_train, r2_test = region2_permuted[train_idx], region2_permuted[test_idx]
 
                 cca = CCA(n_components=n_components)
-                cca.fit(r1_train, r2_train)
+                try:
+                    cca.fit(r1_train, r2_train)
+                except ValueError as e:
+                    print(f"Error fitting CCA for permutation {perm}: {e}")
+                    continue
                 r1_transform, r2_transform = cca.transform(r1_test, r2_test)
 
                 # Calculate correlations for each component
