@@ -201,6 +201,10 @@ for i_stim, stim in enumerate(stim_types):
                                     'C': best_C_val
                                 })
 
+                                df_corr_partial = pd.DataFrame(correlation_data)
+                                df_corr_partial.to_csv(f"{file_path}/CCA_SVM_{stim}_partial.csv", index=False)
+                                df_corr_partial.to_feather(f"{file_path}/CCA_SVM_{stim}_partial.feather")
+
     df_correlations = pd.DataFrame(correlation_data)
     df_correlations.to_feather(f"{file_path}/CCA_SVM_{stim}.feather")
     df_correlations.to_csv(f"{file_path}/CCA_SVM_{stim}.csv", index=False)
