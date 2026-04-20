@@ -76,7 +76,13 @@ for i_stim, stim in enumerate(stim_types):
                 region1_neurons = np.random.choice(brain_resp_array.shape[1], size=neuron_threshold, replace=False)
                 brain_resp_array = brain_resp_array[:, region1_neurons]
 
+                if brainRegion == "Ventral auditory area":
+                    i -= 1 # This is to make sure we compare dorsal v ventral and ventral v dorsal
+
                 for brainRegion2 in uniqRegions[i+1:]:
+                    if brainRegion == "Ventral auditory area":
+                        brainRegion2 = "Dorsal auditory area"
+                        i += 2
                     brainRegion2_mask = brain_session_array == brainRegion2
                     brain2_resp_array = session_resp_array[brainRegion2_mask, :].T  # Make the array (nTrials, nNeurons)
                     region2_sess_count = brain2_resp_array.shape[1]
