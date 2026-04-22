@@ -16,6 +16,7 @@ import seaborn as sns
 import pandas as pd
 from tqdm import tqdm
 import pickle
+from concurrent.futures import ProcessPoolExecutor, as_completed
 
 from analysis_class import FiringRateAnalysis
 
@@ -619,11 +620,22 @@ class TwoRegionCCAAnalysis:
         print("Note: Primary auditory area vs itself will use within-region split analysis")
 
         all_results = []
-        for region1, region2 in region_pairs:
-            pair_results = self.analyze_region_pair(region1, region2, n_iterations=n_iterations, verbose=verbose)
-            all_results.extend(pair_results)
-            with open(os.path.join(self.output_dir, "cca_primary_auditory_results_full_intermediate_pairs.pkl"), 'wb') as f:
-                pickle.dump(all_results, f)
+        with ProcessPoolExecutor() as executor:
+            futures = {
+                executor.submit(self.analyze_region_pair, region1, region2, n_iterations, verbose): (region1, region2)
+                for region1, region2 in region_pairs
+            }
+
+            for future in as_completed(futures):
+                region1, region2 = futures[future]
+                try:
+                    pair_results = future.result()
+                    all_results.extend(pair_results)
+                    with open(os.path.join(self.output_dir, "cca_primary_auditory_results_full_intermediate_pairs.pkl"),
+                              'wb') as f:
+                        pickle.dump(all_results, f)
+                except Exception as e:
+                    print(f"Region pair ({region1}, {region2}) failed with error: {e}")
 
         if not all_results:
             print("No results generated. Check neuron thresholds and data availability.")
