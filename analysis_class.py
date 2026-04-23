@@ -95,7 +95,7 @@ class AnalysisBase:
         }
 
         self.response_regions = ["baseline", "onset", "sustained", "offset"]
-        self.stim_types = self.stim_info.keys()
+        self.stim_types = list(self.stim_info.keys())
         # Add simplified site names
         self._process_site_names()
 
@@ -132,7 +132,8 @@ class AnalysisBase:
     def load_arrays(self, filename):
         """Load numpy arrays from the figures data path."""
         filepath = os.path.join(self.figdata_path, filename)
-        return np.load(filepath, allow_pickle=True)
+        npz = np.load(filepath, allow_pickle=True)
+        return dict(npz)
 
 
 class FiringRateProcessing(AnalysisBase):

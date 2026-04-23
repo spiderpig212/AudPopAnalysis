@@ -591,7 +591,7 @@ class TwoRegionCCAAnalysis:
             Number of iterations for sampling neurons
         """
         # Get available regions
-        stim_arrays = self.fr_db.return_arrays(list(self.stim_types)[0])
+        stim_arrays = self.fr_db.return_arrays(self.stim_types[0])
         brain_regions = stim_arrays["brainRegionArray"]
         # Rename posterior to also be dorsal instead of treating them as separate areas
         brain_regions[brain_regions == "Posterior auditory area"] = "Dorsal auditory area"
@@ -622,9 +622,8 @@ class TwoRegionCCAAnalysis:
         all_results = []
         with ProcessPoolExecutor() as executor:
             futures = {
-                executor.submit(self.analyze_region_pair, region1, region2, n_iterations, verbose): (region1, region2)
-                for region1, region2 in region_pairs
-            }
+                executor.submit(self.analyze_region_pair, region1, region2, n_iterations, verbose=False): (region1, region2) for region1, region2 in region_pairs
+                        }
 
             for future in as_completed(futures):
                 region1, region2 = futures[future]
@@ -634,8 +633,10 @@ class TwoRegionCCAAnalysis:
                     with open(os.path.join(self.output_dir, "cca_primary_auditory_results_full_intermediate_pairs.pkl"),
                               'wb') as f:
                         pickle.dump(all_results, f)
-                except Exception as e:
-                    print(f"Region pair ({region1}, {region2}) failed with error: {e}")
+                except ValueError as e:
+                    pass
+                # except Exception as e:
+                #     print(f"Region pair ({region1}, {region2}) failed with error: {e}")
 
         if not all_results:
             print("No results generated. Check neuron thresholds and data availability.")
@@ -1837,6 +1838,22 @@ if __name__ == "__main__":
     # Initialize analysis
     analyzer = TwoRegionCCAAnalysis(neuron_threshold=40, n_splits=5, random_state=42,
                                    n_permutations=10000)  # TODO: Will want to do with n_permutations=10000 at some point
+
+    # Debugging section for multi-threading
+    # import pickle
+    #
+    # for attr_name, attr_val in vars(analyzer).items():
+    #     try:
+    #         pickle.dumps(attr_val)
+    #     except Exception as e:
+    #         print(f"analyzer.{attr_name} -> {e}")
+    #
+    # # Check nested attributes on fr_db
+    # for attr_name, attr_val in vars(analyzer.fr_db).items():
+    #     try:
+    #         pickle.dumps(attr_val)
+    #     except Exception as e:
+    #         print(f"analyzer.fr_db.{attr_name} -> {e}")
 
     # Example: analyze specific region pairs
     # Uncomment and modify these lines to analyze specific pairs:
