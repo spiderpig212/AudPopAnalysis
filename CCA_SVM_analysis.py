@@ -31,6 +31,8 @@ stim_types = fr_db.stim_types
 # Dictionary to store decision boundaries for visualization
 decision_boundaries_data = {}
 
+# TODO: Look at adding multithreading for the top of this loop. There is no reason we can't process most stims simultaneously
+#  Only need to watch for if having the class draw multiple npz simultaneously will create an IO issue
 for i_stim, stim in enumerate(stim_types):
 
     stim_info = fr_db.stim_info[stim]
@@ -166,8 +168,7 @@ for i_stim, stim in enumerate(stim_types):
                                     X_test_fold = combined_resp_array_source[test_idx]
                                     y_test_fold = masked_stims[test_idx]
 
-                                    # TODO: Change SVC kernal to linear
-                                    # TODO: Also add in calcualtion for dorsal v ventral and ventral v dorsal
+                                    # TODO: Also add in calculation for dorsal v ventral and ventral v dorsal (tentatively done)
                                     svm_boundary = SVC(C=best_C_val, random_state=42, kernel='linear')
                                     svm_boundary.fit(X_train_fold, y_train_fold)
                                     y_pred_fold = svm_boundary.predict(X_test_fold)

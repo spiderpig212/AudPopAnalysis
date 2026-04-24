@@ -633,10 +633,10 @@ class TwoRegionCCAAnalysis:
                     with open(os.path.join(self.output_dir, "cca_primary_auditory_results_full_intermediate_pairs.pkl"),
                               'wb') as f:
                         pickle.dump(all_results, f)
-                except ValueError as e:
-                    pass
-                # except Exception as e:
-                #     print(f"Region pair ({region1}, {region2}) failed with error: {e}")
+#                except ValueError as e:
+#                     pass
+                except Exception as e:
+                    print(f"Region pair ({region1}, {region2}) failed with error: {e}")
 
         if not all_results:
             print("No results generated. Check neuron thresholds and data availability.")
@@ -1855,12 +1855,6 @@ if __name__ == "__main__":
     #     except Exception as e:
     #         print(f"analyzer.fr_db.{attr_name} -> {e}")
 
-    # Example: analyze specific region pairs
-    # Uncomment and modify these lines to analyze specific pairs:
-    # region_pairs = [('AudP', 'AudV'), ('AudP', 'TeA')]
-    # results_df = analyzer.run_analysis(region_pairs)
-
-    # Or analyze all possible pairs:
     results_df = analyzer.run_analysis(n_iterations=5, verbose=False)
 
     print("\nAnalysis complete! Results saved to:", analyzer.output_dir)
