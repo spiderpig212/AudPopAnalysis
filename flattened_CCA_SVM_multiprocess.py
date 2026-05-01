@@ -27,7 +27,7 @@ from analysis_class import FiringRateAnalysis
 # Worker function: processes ONE (stim, respRange) combination.
 # Must be defined at module level so it can be pickled and sent to workers.
 # ---------------------------------------------------------------------------
-def process_stim_resp(task):
+def process_stim_resp(task, file_path):
     """
     Run the full CCA + SVM pipeline for a single (stim, respRange) combination.
 
@@ -98,10 +98,14 @@ def process_stim_resp(task):
                 region2_neurons = rng.choice(brain2_resp_array.shape[1], size=neuron_threshold, replace=False)
                 brain2_resp_array = brain2_resp_array[:, region2_neurons]
 
+                significant_df = pd.read_csv(
+                    f"{file_path}/CCA_two_region_analysis/cca_primary_auditory_results.csv")
+                # Get the significant components for the region pair, stimulus, response range, and session
+                n_components = significant_df[significant_df["region1"] == f"{brainRegion}" and significant_df["region2"] == f"{brainRegion2}" and significant_df["stimulus"] == stim and significant_df["response_range"] == respRange and significant_df["session"] == session]["significant_components"]
                 br1_train, br1_test, br2_train, br2_test = train_test_split(
                     brain_resp_array, brain2_resp_array, test_size=0.2, random_state=42
                 )
-                n_components = min(brain_resp_array.shape[1], brain2_resp_array.shape[1])
+                # n_components = min(brain_resp_array.shape[1], brain2_resp_array.shape[1])  # TODO: This should be pulled from optimal fit as it should be d components
                 cca = CCA(n_components=n_components)
                 response_transform_source, response_transform_target = cca.fit_transform(
                     brain_resp_array, brain2_resp_array
@@ -279,7 +283,7 @@ def main():
     print(f"Launching {len(tasks)} tasks across {max_workers} worker processes")
 
     with ProcessPoolExecutor(max_workers=max_workers) as executor:
-        futures = {executor.submit(process_stim_resp, t): (t["stim"], t["respRange"]) for t in tasks}
+        futures = {executor.submit(process_stim_resp, t, file_path=file_path): (t["stim"], t["respRange"]) for t in tasks}
         for fut in as_completed(futures):
             stim, respRange = futures[fut]
             try:

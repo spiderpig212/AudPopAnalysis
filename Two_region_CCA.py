@@ -610,6 +610,9 @@ class TwoRegionCCAAnalysis:
                 for region in uniq_regions:
                     if region != primary_region:
                         region_pairs.append((primary_region, region))
+                # Add dorsal - ventral and it's reciprocal for SVM later
+                region_pairs.append(("Dorsal auditory area", "Ventral auditory area"))
+                region_pairs.append(("Ventral auditory area", "Dorsal auditory area"))
             else:
                 print("Primary auditory area not found in available regions:")
                 print(uniq_regions)
