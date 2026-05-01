@@ -147,13 +147,12 @@ def process_stim_resp(task):
                             best_C_val = best['C']
                             pca = PCA(n_components=n_components, random_state=42)
                             transformed_resp_data = pca.fit_transform(combined_resp_array_source)
-                            pca_scores = cross_val_score(pca, transformed_resp_data, masked_stims, cv=cv,
+                            svm_pca = SVC(C=best_C_val, random_state=42, kernel='linear')
+                            pca_scores = cross_val_score(svm_pca, transformed_resp_data, masked_stims, cv=cv,
                                                          scoring='accuracy')
                             # pca_train, pca_test, stim_train, stim_test = train_test_split(transformed_resp_data,
                             #                                                               masked_stims, test_size=0.2,
                             #                                                               random_state=42)
-                            # svc_pca = SVC(C=best_C_val, random_state=42, kernel='linear')
-                            # svc_pca.fit(pca_train, stim_train)
                             # pca_accuracy = svc_pca.score(pca_test, stim_test)
 
                             # Hyperparameter sweep plot
