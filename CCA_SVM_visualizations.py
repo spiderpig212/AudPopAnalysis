@@ -83,7 +83,12 @@ def create_boxplots_am_puretones():
     """Create box plots for AM and pureTones comparing brain region pairs accuracy values"""
     # Load data for AM and pureTones
     for stim in ["AM", "pureTones"]:
-        stim_df = pd.read_feather(f"{file_path}/CCA_SVM_{stim}.feather")
+        try:
+            stim_df = pd.read_feather(f"{file_path}/CCA_SVC/CCA_SVM_{stim}.feather")
+        except FileNotFoundError:
+            print(f"No data found for {stim}, skipping boxplot creation.")
+            continue
+
         # pt_df = pd.read_feather(f"{file_path}/CCA_correlations_pureTones.feather")
 
         # combined_df = pd.concat([am_df, pt_df], ignore_index=True)
@@ -135,7 +140,12 @@ def create_boxplots_am_puretones():
 def create_heatmap_natural_sounds():
     """Create heatmap for natural sounds with upper triangle only"""
     # Load natural sounds data
-    ns_df = pd.read_feather(f"{file_path}/CCA_SVM_naturalSound.feather")
+    try:
+        ns_df = pd.read_feather(f"{file_path}/CCA_SVC/CCA_SVM_naturalSound.feather")
+    except FileNotFoundError:
+        print("No data found for natural sounds, skipping heatmap creation.")
+        return
+
     stim_info = fr_db.stim_info['naturalSound']
     stimVals = stim_info['stimVals']
 
@@ -209,7 +219,12 @@ def create_heatmap_stims_pairwise():
     """Create heatmap for natural sounds with upper triangle only"""
     # Load natural sounds data\
     for stim in ["AM", "pureTones", "naturalSound"]:
-        ns_df = pd.read_feather(f"{file_path}/CCA_SVM_{stim}.feather")
+        try:
+            ns_df = pd.read_feather(f"{file_path}/CCA_SVC/CCA_SVM_{stim}.feather")
+        except FileNotFoundError:
+            print(f"No data found for {stim}, skipping.")
+            continue
+
         if stim == "naturalSound":
             stim_info = fr_db.stim_info[f'{stim}']
             stimVals = stim_info['stimVals']
@@ -292,7 +307,12 @@ def create_delta_heatmap_stims_pairwise():
     """Create heatmap for natural sounds with upper triangle only"""
     # Load natural sounds data\
     for stim in ["AM", "pureTones", "naturalSound"]:
-        ns_df = pd.read_feather(f"{file_path}/CCA_SVM_{stim}.feather")
+        try:
+            ns_df = pd.read_feather(f"{file_path}/CCA_SVC/CCA_SVM_{stim}.feather")
+        except FileNotFoundError:
+            print(f"No data found for {stim}, skipping.")
+            continue
+
         if stim == "naturalSound":
             stim_info = fr_db.stim_info[f'{stim}']
             stimVals = stim_info['stimVals']
@@ -371,7 +391,7 @@ def create_delta_heatmap_stims_pairwise():
 def plot_example_decision_boundaries():
     """Plot example decision boundaries from stored data"""
     # Load decision boundaries
-    with open(f"{file_path}/decision_boundaries_data.pkl", 'rb') as f:
+    with open(f"{file_path}/CCA_SVC/decision_boundaries_data.pkl", 'rb') as f:
         boundaries_data = pickle.load(f)
 
     # Plot a few examples
@@ -403,7 +423,11 @@ def create_upper_triangle_boxplots():
     corrected for multiple comparisons using Benjamini-Hochberg FDR.
     """
     for stim in ["AM", "pureTones", "naturalSound"]:
-        ns_df = pd.read_feather(f"{file_path}/CCA_SVM_{stim}.feather")
+        try:
+            ns_df = pd.read_feather(f"{file_path}/CCA_SVC/CCA_SVM_{stim}.feather")
+        except FileNotFoundError:
+            print(f"No data found for {stim}, skipping.")
+            continue
 
         region_pairs = ns_df['region_pair'].unique()
         response_ranges = ns_df['response_range'].unique()

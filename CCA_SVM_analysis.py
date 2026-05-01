@@ -31,7 +31,7 @@ stim_types = fr_db.stim_types
 # Dictionary to store decision boundaries for visualization
 decision_boundaries_data = {}
 
-# TODO: Look at adding multithreading for the top of this loop. There is no reason we can't process most stims simultaneously
+# TODO: Look at adding multiprocessing for the top of this loop. There is no reason we can't process most stims simultaneously
 #  Only need to watch for if having the class draw multiple npz simultaneously will create an IO issue
 for i_stim, stim in enumerate(stim_types):
 
@@ -58,7 +58,7 @@ for i_stim, stim in enumerate(stim_types):
 
     C_values = np.logspace(-3, 1.2, 20)
 
-    for respRange in response_ranges:
+    for respRange in response_ranges:  # TODO: Could also multiprocess here
         respArray = stim_arrays[f"{respRange}fr"]
 
         for session in uniqSessions:
