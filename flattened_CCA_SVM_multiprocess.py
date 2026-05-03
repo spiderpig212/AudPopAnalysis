@@ -101,7 +101,14 @@ def process_stim_resp(task, file_path):
                 significant_df = pd.read_csv(
                     f"{file_path}/CCA_two_region_analysis/cca_primary_auditory_results.csv")
                 # Get the significant components for the region pair, stimulus, response range, and session
-                n_components = significant_df[significant_df["region1"] == f"{brainRegion}" and significant_df["region2"] == f"{brainRegion2}" and significant_df["stimulus"] == stim and significant_df["response_range"] == respRange and significant_df["session"] == session]["significant_components"]
+                mask_n_comps = (
+                        (significant_df["region1"] == brainRegion)
+                        & (significant_df["region2"] == brainRegion2)
+                        & (significant_df["stimulus"] == stim)
+                        & (significant_df["response_range"] == respRange)
+                        & (significant_df["session"] == session)
+                )
+                n_components = significant_df.loc[mask_n_comps, "significant_components"].iloc[0]
                 br1_train, br1_test, br2_train, br2_test = train_test_split(
                     brain_resp_array, brain2_resp_array, test_size=0.2, random_state=42
                 )
@@ -282,6 +289,8 @@ def main():
     max_workers = min(len(tasks), max(1, (os.cpu_count() or 2) // 2))
     print(f"Launching {len(tasks)} tasks across {max_workers} worker processes")
 
+    # TODO: Look at removing raise call so that way one process failing doesn't kill the others before they finish running
+    #  Viz file right now loads in each stim which contains all response ranges so may need to adjust for what response ranges we do have
     with ProcessPoolExecutor(max_workers=max_workers) as executor:
         futures = {executor.submit(process_stim_resp, t, file_path=file_path): (t["stim"], t["respRange"]) for t in tasks}
         for fut in as_completed(futures):
