@@ -108,7 +108,15 @@ def process_stim_resp(task, file_path):
                         & (significant_df["response_range"] == respRange)
                         & (significant_df["session"] == session)
                 )
-                n_components = significant_df.loc[mask_n_comps, "significant_components"].iloc[0]
+                try:
+                    n_components = significant_df.loc[mask_n_comps, "significant_components"].iloc[0]
+                    n_components = np.int64(n_components)
+                    if n_components < 1:
+                        continue
+                except (IndexError, ValueError):
+                    print(f"[{stim}/{respRange}] No significant components found for {brainRegion} vs {brainRegion2}, "
+                          f"session {session}")
+                    continue
                 br1_train, br1_test, br2_train, br2_test = train_test_split(
                     brain_resp_array, brain2_resp_array, test_size=0.2, random_state=42
                 )
@@ -157,7 +165,7 @@ def process_stim_resp(task, file_path):
                             best = max(C_results, key=lambda x: x['mean_accuracy_cca'])
                             best_C_val = best['C']
                             pca = PCA(n_components=n_components, random_state=42)
-                            transformed_resp_data = pca.fit_transform(combined_resp_array_source)
+                            transformed_resp_data = pca.fit_transform(combined_masked_resp_array)
                             svm_pca = SVC(C=best_C_val, random_state=42, kernel='linear')
                             pca_scores = cross_val_score(svm_pca, transformed_resp_data, masked_stims, cv=cv,
                                                          scoring='accuracy')
