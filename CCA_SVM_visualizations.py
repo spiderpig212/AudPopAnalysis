@@ -388,6 +388,91 @@ def create_delta_heatmap_stims_pairwise():
         plt.savefig(f"{file_path}/CCA_SVC/delta_heatmaps/heatmap_delta_{stim}.png", dpi=400, bbox_inches='tight')
         plt.show()
 
+def create_delta_heatmap_stims_pairwise_pca():
+    """Create heatmap for natural sounds with upper triangle only"""
+    # Load natural sounds data\
+    for stim in ["AM", "pureTones", "naturalSound"]:
+        try:
+            ns_df = pd.read_feather(f"{file_path}/CCA_SVC/CCA_SVM_{stim}.feather")
+        except FileNotFoundError:
+            print(f"No data found for {stim}, skipping.")
+            continue
+
+        if stim == "naturalSound":
+            stim_info = fr_db.stim_info[f'{stim}']
+            stimVals = stim_info['stimVals']
+
+        # Get unique values
+        region_pairs = ns_df['region_pair'].unique()
+        response_ranges = ns_df['response_range'].unique()
+
+        # Get unique stimuli from the stim_pair column
+        all_stims = set()
+        for stim_pair in ns_df['stim_pair']:
+            all_stims.update(stim_pair)
+        unique_stims = sorted(list(all_stims))
+
+        # Create figure with subplots
+        n_pairs = len(region_pairs)
+        n_ranges = len(response_ranges)
+        fig, axes = plt.subplots(n_ranges, n_pairs, figsize=(6 * n_pairs, 5 * n_ranges))
+
+        if n_ranges == 1:
+            axes = axes.reshape(1, -1)
+        if n_pairs == 1:
+            axes = axes.reshape(-1, 1)
+
+        for i, resp_range in enumerate(response_ranges):
+            for j, region_pair in enumerate(region_pairs):
+                ax = axes[i, j]
+
+                # Filter data for this combination
+                subset = ns_df[(ns_df['response_range'] == resp_range) &
+                               (ns_df['region_pair'] == region_pair)]
+
+                if len(subset) > 0:
+                    # Create accuracy matrix
+                    n_stims = len(unique_stims)
+                    accuracy_matrix = np.full((n_stims, n_stims), np.nan)
+
+                    # Fill the matrix with accuracy values
+                    for _, row in subset.iterrows():
+                        stim1, stim2 = row['stim_pair']
+                        idx1 = unique_stims.index(stim1)
+                        idx2 = unique_stims.index(stim2)
+                        accuracy_matrix[idx1, idx2] = row['mean_accuracy_pca'] - row['mean_accuracy']
+                        # Since accuracies should be symmetric, fill both positions
+                        accuracy_matrix[idx2, idx1] = row['mean_accuracy_pca'] - row['mean_accuracy']
+
+                    # Set diagonal to NaN (no self-comparison)
+                    np.fill_diagonal(accuracy_matrix, np.nan)
+
+                    # Create mask for upper triangle only
+                    mask = np.tril(np.ones_like(accuracy_matrix, dtype=bool))
+
+                    # Create heatmap
+                    if stim == "naturalSound":
+                        sns.heatmap(accuracy_matrix, mask=mask, #annot=True, fmt='.2f',
+                                    cmap='RdBu', ax=ax, center=0, cbar_kws={'label': 'Accuracy PCA - Accuracy'},
+                                    xticklabels=[f'{stimVals[int(s)]}' for s in unique_stims],
+                                    yticklabels=[f'{stimVals[int(s)]}' for s in unique_stims])
+                    else:  # Use center to adjust the colorbar? Annotate to False to clean up the appearance
+                        sns.heatmap(accuracy_matrix, mask=mask, #annot=True, fmt='.2f',
+                                    cmap='RdBu', ax=ax, center=0, cbar_kws={'label': 'Accuracy PCA - Accuracy'},
+                                    xticklabels=unique_stims, yticklabels=unique_stims)
+
+                    ax.set_title(f'{region_pair}\n{resp_range}')
+                    ax.set_xlabel('Stimulus Value')
+                    ax.set_ylabel('Stimulus Value')
+                else:
+                    ax.set_title(f'{region_pair}\n{resp_range} (No data)')
+                    ax.set_xlabel('Stimulus Value')
+                    ax.set_ylabel('Stimulus Value')
+
+        plt.tight_layout()
+        plt.savefig(f"{file_path}/CCA_SVC/delta_heatmaps_pca/heatmap_delta_{stim}.png", dpi=400, bbox_inches='tight')
+        plt.show()
+
 def plot_example_decision_boundaries():
     """Plot example decision boundaries from stored data"""
     # Load decision boundaries
@@ -576,6 +661,7 @@ create_heatmap_stims_pairwise()
 
 print("Creating delta heatmap for stims...")
 create_delta_heatmap_stims_pairwise()
+create_delta_heatmap_stims_pairwise_pca()
 
 print("Creating upper triangle boxplots with stats...")
 create_upper_triangle_boxplots()
