@@ -11,7 +11,7 @@ import pickle
 from concurrent.futures import ProcessPoolExecutor, as_completed
 
 import numpy as np
-from sklearn.svm import SVC
+from sklearn.svm import SVC, LinearSVR
 from sklearn.decomposition import PCA
 from sklearn.model_selection import StratifiedKFold, cross_val_score
 from sklearn.cross_decomposition import CCA
@@ -65,6 +65,7 @@ def process_stim_resp(task, file_path):
 
     correlation_data = []
     decision_boundaries_data = {}
+    correlation_data_svr = []
 
     for session in uniqSessions:
         session_mask = sessionArray == session
@@ -128,6 +129,46 @@ def process_stim_resp(task, file_path):
 
                 if stim in ('naturalSound', 'AM', 'pureTones'):
                     cv = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=42)
+
+                    if stim in ('AM', 'pureTones'):
+                        # Have to take the log of the stim values to make it linear
+                        C_results_svr = []
+                        for c in C_values:
+                            log_stims = np.log(stimArray)
+                            svr_cca = LinearSVR(C=C_val, random_state=42)
+                            svr = LinearSVR(C=C_val, random_state=42)
+                            cv_scores_svr = cross_val_score(svr_cca, response_transform_source,
+                                                            log_stims, cv=cv, scoring='neg_mean_squared_error')
+                            cv_scores_svr_untransformed = cross_val_score(svr, brain_resp_array,
+                                                                          log_stims, cv=cv,
+                                                                          scoring='neg_mean_squared_error')
+                            C_results_svr.append({
+                                'C': C_val,
+                                'cv_scores_svr_cca': cv_scores_svr,
+                                'cv_scores_svr_untransformed': cv_scores_svr_untransformed,
+                                'mean_accuracy_svr_cca': np.mean(cv_scores_svr),
+                                'mean_accuracy_svr_untransformed': np.mean(cv_scores_svr_untransformed),
+                                'std_accuracy_svr_cca': np.std(cv_scores_svr),
+                                'std_accuracy_svr_untransformed': np.std(cv_scores_svr_untransformed),
+                            })
+                        best_svr = max(C_results_svr, key=lambda x: x['mean_accuracy_cca'])
+
+                        correlation_data_svr.append({
+                            'region_pair': f"{brainRegion}_vs_{brainRegion2}",
+                            'region1': brainRegion,
+                            'region2': brainRegion2,
+                            'mean_accuracy_svr_cca': best_svr['mean_accuracy_svr_cca'],
+                            'std_accuracy_svr_cca': best_svr['std_accuracy_svr_cca'],
+                            'cv_scores_svr_cca': best_svr['cv_scores_svr_cca'],
+                            'cv_scores_svr': best_svr['cv_scores_svr_untransformed'],
+                            'cv_scores_svr_untransformed': best_svr['cv_scores_svr_untransformed'],
+                            'n_trials_cca': len(response_transform_source),
+                            'response_range': respRange,
+                            'stimulus': stim,
+                            'session': session,
+                            'best_C': best_svr['C'],
+                        })
+
                     for stim_idx, stim_val in tqdm(list(enumerate(uniqStims)),
                                                    desc=f"{stim}/{respRange}/{session}",
                                                    leave=False):
@@ -242,7 +283,7 @@ def process_stim_resp(task, file_path):
                                 'C': best_C_val,
                             })
 
-    return stim, respRange, correlation_data, decision_boundaries_data
+    return stim, respRange, correlation_data, decision_boundaries_data, correlation_data_svr
 
 
 # ---------------------------------------------------------------------------
@@ -275,6 +316,7 @@ def main():
         stimVals = stim_info.get('stimVals') if stim == 'naturalSound' else None
 
         per_stim_meta[stim] = {"correlation_data": []}
+        per_stim_meta[stim] = {"correlation_data_svr": []}
 
         for respRange in response_ranges:
             tasks.append({
@@ -304,11 +346,12 @@ def main():
         for fut in as_completed(futures):
             stim, respRange = futures[fut]
             try:
-                stim_out, resp_out, corr_data, db_data = fut.result()
+                stim_out, resp_out, corr_data, db_data, corr_data_svr = fut.result()
             except Exception as e:
                 print(f"Task {stim}/{respRange} failed: {e!r}")
                 raise
             per_stim_meta[stim_out]["correlation_data"].extend(corr_data)
+            per_stim_meta[stim_out]["correlation_data_svr"].extend(corr_data_svr)
             # Merge boundary dict (keys already include stim/respRange so no collisions)
             for k, v in db_data.items():
                 if k not in decision_boundaries_data and len(decision_boundaries_data) < 5:
@@ -318,8 +361,11 @@ def main():
     # --- Persist per-stim outputs (parent only — no concurrent writes) ---
     for stim, meta in per_stim_meta.items():
         df = pd.DataFrame(meta["correlation_data"])
-        df.to_feather(f"{file_path}/CCA_SVM_{stim}.feather")
-        df.to_csv(f"{file_path}/CCA_SVM_{stim}.csv", index=False)
+        df.to_feather(f"{file_path}/CCA_SVC/CCA_SVM_{stim}.feather")
+        df.to_csv(f"{file_path}/CCA_SVC/CCA_SVM_{stim}.csv", index=False)
+        df_svr = pd.DataFrame(meta["correlation_data_svr"])
+        df_svr.to_feather(f"{file_path}/CCA_SVR/CCA_SVR_{stim}.feather")
+        df_svr.to_csv(f"{file_path}/CCA_SVR/CCA_SVR_{stim}.csv", index=False)
 
     with open(f"{file_path}/decision_boundaries_data.pkl", 'wb') as f:
         pickle.dump(decision_boundaries_data, f)
