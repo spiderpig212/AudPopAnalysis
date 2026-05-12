@@ -135,15 +135,15 @@ def process_stim_resp(task, file_path):
                         C_results_svr = []
                         for c in C_values:
                             log_stims = np.log(stimArray)
-                            svr_cca = LinearSVR(C=C_val, random_state=42)
-                            svr = LinearSVR(C=C_val, random_state=42)
+                            svr_cca = LinearSVR(C=c, random_state=42)
+                            svr = LinearSVR(C=c, random_state=42)
                             cv_scores_svr = cross_val_score(svr_cca, response_transform_source,
                                                             log_stims, cv=cv, scoring='neg_mean_squared_error')
                             cv_scores_svr_untransformed = cross_val_score(svr, brain_resp_array,
                                                                           log_stims, cv=cv,
                                                                           scoring='neg_mean_squared_error')
                             C_results_svr.append({
-                                'C': C_val,
+                                'C': c,
                                 'cv_scores_svr_cca': cv_scores_svr,
                                 'cv_scores_svr_untransformed': cv_scores_svr_untransformed,
                                 'mean_accuracy_svr_cca': np.mean(cv_scores_svr),
