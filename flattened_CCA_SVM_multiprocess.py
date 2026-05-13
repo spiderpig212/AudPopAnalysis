@@ -152,7 +152,7 @@ def process_stim_resp(task, file_path):
                                 'std_accuracy_svr_cca': np.std(cv_scores_svr),
                                 'std_accuracy_svr_untransformed': np.std(cv_scores_svr_untransformed),
                             })
-                        best_svr = max(C_results_svr, key=lambda x: x['mean_accuracy_cca'])
+                        best_svr = max(C_results_svr, key=lambda x: x['mean_accuracy_svr_cca'])
 
                         correlation_data_svr.append({
                             'region_pair': f"{brainRegion}_vs_{brainRegion2}",
