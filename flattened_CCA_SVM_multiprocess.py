@@ -13,7 +13,7 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 import numpy as np
 from sklearn.svm import SVC, LinearSVR
 from sklearn.decomposition import PCA
-from sklearn.model_selection import StratifiedKFold, cross_val_score
+from sklearn.model_selection import StratifiedKFold, cross_val_score, KFold
 from sklearn.cross_decomposition import CCA
 from sklearn.model_selection import train_test_split
 from tqdm import tqdm
@@ -129,6 +129,7 @@ def process_stim_resp(task, file_path):
 
                 if stim in ('naturalSound', 'AM', 'pureTones'):
                     cv = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=42)
+                    cv_cont = KFold(n_splits=n_splits, shuffle=True, random_state=42)
 
                     if stim in ('AM', 'pureTones'):
                         # Have to take the log of the stim values to make it linear
@@ -138,9 +139,9 @@ def process_stim_resp(task, file_path):
                             svr_cca = LinearSVR(C=c, random_state=42)
                             svr = LinearSVR(C=c, random_state=42)
                             cv_scores_svr = cross_val_score(svr_cca, response_transform_source,
-                                                            log_stims, cv=cv, scoring='neg_mean_squared_error')
+                                                            log_stims, cv=cv_cont, scoring='neg_mean_squared_error')
                             cv_scores_svr_untransformed = cross_val_score(svr, brain_resp_array,
-                                                                          log_stims, cv=cv,
+                                                                          log_stims, cv=cv_cont,
                                                                           scoring='neg_mean_squared_error')
                             C_results_svr.append({
                                 'C': c,
