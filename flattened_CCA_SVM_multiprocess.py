@@ -99,8 +99,10 @@ def process_stim_resp(task, file_path):
                 region2_neurons = rng.choice(brain2_resp_array.shape[1], size=neuron_threshold, replace=False)
                 brain2_resp_array = brain2_resp_array[:, region2_neurons]
 
+                # significant_df = pd.read_csv(
+                #     f"{file_path}/CCA_two_region_analysis/cca_primary_auditory_results_backup.csv")
                 significant_df = pd.read_csv(
-                    f"{file_path}/CCA_two_region_analysis/cca_primary_auditory_results_backup.csv")
+                    f"{file_path}/CCA_two_region_analysis/cca_primary_auditory_results.csv")
                 # Get the significant components for the region pair, stimulus, response range, and session
                 mask_n_comps = (
                         (significant_df["region1"] == brainRegion)
@@ -316,8 +318,9 @@ def main():
         uniqStims = np.unique(stim_arrays["stimArray"][0, :])
         stimVals = stim_info.get('stimVals') if stim == 'naturalSound' else None
 
-        per_stim_meta[stim] = {"correlation_data": []}
-        per_stim_meta[stim] = {"correlation_data_svr": []}
+        per_stim_meta[stim] = {"correlation_data": [],
+                               "correlation_data_svr": [],
+                               }
 
         for respRange in response_ranges:
             tasks.append({
