@@ -212,34 +212,34 @@ def main():
                 "stimVals": stimVals,
             })
 
-            # Cap workers — sklearn already uses BLAS threads internally, so don't oversubscribe.
-            max_workers = min(len(tasks), max(1, (os.cpu_count() or 2) // 2))
-            print(f"Launching {len(tasks)} tasks across {max_workers} worker processes")
+    # Cap workers — sklearn already uses BLAS threads internally, so don't oversubscribe.
+    max_workers = min(len(tasks), max(1, (os.cpu_count() or 2) // 2))
+    print(f"Launching {len(tasks)} tasks across {max_workers} worker processes")
 
-            # TODO: Look at removing raise call so that way one process failing doesn't kill the others before they finish running
-            #  Viz file right now loads in each stim which contains all response ranges so may need to adjust for what response ranges we do have
-            with ProcessPoolExecutor(max_workers=max_workers) as executor:
-                futures = {executor.submit(process_stim_resp, t, file_path=file_path): (t["stim"], t["respRange"]) for t in
-                           tasks}
-                for fut in as_completed(futures):
-                    stim, respRange = futures[fut]
-                    try:
-                        stim_out, resp_out, corr_data, db_data, corr_data_svr = fut.result()
-                    except Exception as e:
-                        print(f"Task {stim}/{respRange} failed: {e!r}")
-                        raise
-                    per_stim_meta[stim_out]["correlation_data"].extend(corr_data)
-                    per_stim_meta[stim_out]["correlation_data_svr"].extend(corr_data_svr)
-                    print(f"Finished {stim_out}/{resp_out} ({len(corr_data)} rows)")
+    # TODO: Look at removing raise call so that way one process failing doesn't kill the others before they finish running
+    #  Viz file right now loads in each stim which contains all response ranges so may need to adjust for what response ranges we do have
+    with ProcessPoolExecutor(max_workers=max_workers) as executor:
+        futures = {executor.submit(process_stim_resp, t, file_path=file_path): (t["stim"], t["respRange"]) for t in
+                   tasks}
+        for fut in as_completed(futures):
+            stim, respRange = futures[fut]
+            try:
+                stim_out, resp_out, corr_data, db_data, corr_data_svr = fut.result()
+            except Exception as e:
+                print(f"Task {stim}/{respRange} failed: {e!r}")
+                raise
+            per_stim_meta[stim_out]["correlation_data"].extend(corr_data)
+            per_stim_meta[stim_out]["correlation_data_svr"].extend(corr_data_svr)
+            print(f"Finished {stim_out}/{resp_out} ({len(corr_data)} rows)")
 
-            # --- Persist per-stim outputs (parent only — no concurrent writes) ---
-            for stim, meta in per_stim_meta.items():
-                df = pd.DataFrame(meta["correlation_data"])
-                df.to_feather(f"{file_path}/SVC/SVC_{stim}.feather")
-                df.to_csv(f"{file_path}/SVC/SVC_{stim}.csv", index=False)
-                df_svr = pd.DataFrame(meta["correlation_data_svr"])
-                df_svr.to_feather(f"{file_path}/SVR/SVR_{stim}.feather")
-                df_svr.to_csv(f"{file_path}/SVR/SVR_{stim}.csv", index=False)
+    # --- Persist per-stim outputs (parent only — no concurrent writes) ---
+    for stim, meta in per_stim_meta.items():
+        df = pd.DataFrame(meta["correlation_data"])
+        df.to_feather(f"{file_path}/SVC/SVC_{stim}.feather")
+        df.to_csv(f"{file_path}/SVC/SVC_{stim}.csv", index=False)
+        df_svr = pd.DataFrame(meta["correlation_data_svr"])
+        df_svr.to_feather(f"{file_path}/SVR/SVR_{stim}.feather")
+        df_svr.to_csv(f"{file_path}/SVR/SVR_{stim}.csv", index=False)
 
 if __name__ == "__main__":
     main()
