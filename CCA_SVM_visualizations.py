@@ -500,156 +500,6 @@ def plot_example_decision_boundaries():
     plt.show()
 
 
-# def create_upper_triangle_boxplots():
-#     """
-#     For each stimulus type, extract the upper-triangle values (excluding diagonal)
-#     from the pairwise accuracy matrix, plot them as boxplots grouped by region_pair
-#     and response_range, and annotate with one-sample t-test results (mean != 0)
-#     corrected for multiple comparisons using Benjamini-Hochberg FDR.
-#     """
-#     for stim in ["AM", "pureTones", "naturalSound"]:
-#         try:
-#             ns_df = pd.read_feather(f"{file_path}/CCA_SVC/CCA_SVM_{stim}.feather")
-#         except FileNotFoundError:
-#             print(f"No data found for {stim}, skipping.")
-#             continue
-#
-#         region_pairs = ns_df['region_pair'].unique()
-#         response_ranges = ns_df['response_range'].unique()
-#
-#         # Collect upper-triangle values per (region_pair, response_range) group
-#         all_stims = set()
-#         for stim_pair in ns_df['stim_pair']:
-#             all_stims.update(stim_pair)
-#         unique_stims = sorted(list(all_stims))
-#         n_stims = len(unique_stims)
-#
-#         # Build a dict: key -> list of upper-triangle values
-#         group_values = {}
-#         group_labels = []
-#
-#         for resp_range in response_ranges:
-#             for region_pair in region_pairs:
-#                 subset = ns_df[
-#                     (ns_df['response_range'] == resp_range) &
-#                     (ns_df['region_pair'] == region_pair)
-#                 ]
-#
-#                 if len(subset) == 0:
-#                     continue
-#
-#                 # Build accuracy matrix
-#                 accuracy_matrix = np.full((n_stims, n_stims), np.nan)
-#                 for _, row in subset.iterrows():
-#                     stim1, stim2 = row['stim_pair']
-#                     idx1 = unique_stims.index(stim1)
-#                     idx2 = unique_stims.index(stim2)
-#                     accuracy_matrix[idx1, idx2] = row['mean_accuracy_cca'] - row['mean_accuracy']
-#                     accuracy_matrix[idx2, idx1] = row['mean_accuracy_cca'] - row['mean_accuracy']
-#                 np.fill_diagonal(accuracy_matrix, np.nan)
-#
-#                 # Extract upper triangle (k=1 excludes diagonal)
-#                 upper_idx = np.triu_indices(n_stims, k=1)
-#                 upper_vals = accuracy_matrix[upper_idx]
-#                 upper_vals = upper_vals[~np.isnan(upper_vals)]
-#
-#                 if len(upper_vals) > 0:
-#                     label = f"{region_pair}\n{resp_range}"
-#                     group_values[label] = upper_vals
-#                     group_labels.append(label)
-#
-#         if not group_labels:
-#             print(f"No data found for {stim}, skipping.")
-#             continue
-#
-#         # ── Statistical testing ──────────────────────────────────────────────
-#         # One-sample t-test: H0: mean == 0 for each group
-#         raw_pvals = []
-#         t_stats = []
-#         for label in group_labels:
-#             vals = group_values[label]
-#             if len(vals) >= 2:
-#                 t_stat, p_val = stats.ttest_1samp(vals, popmean=0)
-#             else:
-#                 t_stat, p_val = np.nan, np.nan
-#             t_stats.append(t_stat)
-#             raw_pvals.append(p_val)
-#
-#         # Benjamini-Hochberg FDR correction across all groups
-#         valid_mask = ~np.isnan(raw_pvals)
-#         corrected_pvals = np.full(len(raw_pvals), np.nan)
-#         reject_flags = np.zeros(len(raw_pvals), dtype=bool)
-#
-#         if valid_mask.sum() > 0:
-#             valid_pvals = np.array(raw_pvals)[valid_mask]
-#             reject, pvals_corr, _, _ = multipletests(valid_pvals, alpha=0.05, method='fdr_bh')
-#             corrected_pvals[valid_mask] = pvals_corr
-#             reject_flags[valid_mask] = reject
-#
-#         # ── Plotting ─────────────────────────────────────────────────────────
-#         n_groups = len(group_labels)
-#         fig_width = max(6, n_groups * 1.4)
-#         fig, ax = plt.subplots(figsize=(fig_width, 6))
-#
-#         box_data = [group_values[lbl] for lbl in group_labels]
-#         bp = ax.boxplot(box_data, patch_artist=True, notch=False,
-#                         medianprops=dict(color='black', linewidth=2))
-#
-#         # Colour boxes by significance
-#         colors = ['#d62728' if rej else '#aec7e8' for rej in reject_flags]
-#         for patch, color in zip(bp['boxes'], colors):
-#             patch.set_facecolor(color)
-#
-#         # Reference line at 0
-#         ax.axhline(y=0, color='black', linestyle='--', linewidth=1, alpha=0.6, label='Mean = 0')
-#
-#         # Annotate each box with corrected p-value
-#         y_max = max(v.max() for v in box_data if len(v) > 0)
-#         y_range = y_max - min(v.min() for v in box_data if len(v) > 0)
-#         annotation_y = y_max + y_range * 0.05
-#
-#         for idx, (label, cp, rej) in enumerate(zip(group_labels, corrected_pvals, reject_flags)):
-#             x_pos = idx + 1
-#             if np.isnan(cp):
-#                 sig_str = "n/a"
-#             elif cp < 0.001:
-#                 sig_str = "***"
-#             elif cp < 0.01:
-#                 sig_str = "**"
-#             elif cp < 0.05:
-#                 sig_str = "*"
-#             else:
-#                 sig_str = "ns"
-#             ax.text(x_pos, annotation_y, sig_str,
-#                     ha='center', va='bottom', fontsize=10,
-#                     color='#d62728' if rej else 'gray')
-#
-#         ax.set_xticks(range(1, n_groups + 1))
-#         ax.set_xticklabels(group_labels, fontsize=8, rotation=30, ha='right')
-#         ax.set_ylabel('CCA Accuracy (upper triangle values)')
-#         ax.set_title(f'{stim} — Upper Triangle Accuracy Boxplots\n'
-#                      f'(* p<0.05, ** p<0.01, *** p<0.001, BH-corrected; red = significant)')
-#
-#         # Custom legend
-#         from matplotlib.patches import Patch
-#         legend_elements = [
-#             Patch(facecolor='#d62728', label='Significant (BH-corrected)'),
-#             Patch(facecolor='#aec7e8', label='Not significant'),
-#         ]
-#         ax.legend(handles=legend_elements, loc='upper right')
-#
-#         plt.tight_layout()
-#         plt.savefig(f"{file_path}/CCA_SVC/Upper_tri/upper_triangle_boxplots_{stim}.png", dpi=300, bbox_inches='tight')
-#         plt.show()
-#         print(f"\n{stim} — Statistical summary (one-sample t-test vs 0, BH-corrected):")
-#         print(f"{'Group':<30} {'t-stat':>8} {'raw p':>10} {'corr. p':>10} {'sig':>5}")
-#         print("-" * 68)
-#         for label, t, rp, cp, rej in zip(group_labels, t_stats, raw_pvals, corrected_pvals, reject_flags):
-#             sig_marker = "*" if rej else ""
-#             label_flat = label.replace("\n", " | ")
-#             print(f"{label_flat:<30} {t:>8.3f} {rp:>10.4f} {cp:>10.4f} {sig_marker:>5}")
-
-
 def create_upper_triangle_boxplots():
     """
     For each stimulus type, extract the upper-triangle values (excluding diagonal)
@@ -906,6 +756,205 @@ def create_upper_triangle_boxplots():
                   f"{_fmt(pca_vs0_stats[i], 8, 2)} {_fmt(pca_vs0_corr[i], 11)} "
                   f"{_fmt(paired_stats[i], 8, 2)} {_fmt(paired_corr[i], 12)}")
 
+
+def create_SVR_boxplots():
+    """
+    Loads in the support vector regression data and makes a boxplot comparing the accuracies and performing statistics
+    """
+    from itertools import combinations
+
+    for stim in ["AM", "pureTones"]:
+        try:
+            svr_df = pd.read_feather(f"{file_path}/CCA_SVR/CCA_SVR_{stim}.feather")
+        except FileNotFoundError:
+            print(f"No data found for {stim}, skipping.")
+            continue
+
+        svr_df["mean_accuracy_svr_untransformed"] = np.array(
+            [np.mean(val) for val in svr_df["cv_scores_svr_untransformed"].values]) * -1
+        svr_df["mean_std_svr_untransformed"] = np.array(
+            [np.std(val) for val in svr_df["cv_scores_svr_untransformed"].values])
+        svr_df["mean_accuracy_svr_cca"] = svr_df["mean_accuracy_svr_cca"] * -1.  # sklearn uses neg mse to optimize
+
+        # Reshape to long format so CCA & untransformed sit side-by-side per response_range
+        long_df = svr_df.melt(
+            id_vars=["response_range", "region_pair"],
+            value_vars=["mean_accuracy_svr_cca", "mean_accuracy_svr_untransformed"],
+            var_name="transform",
+            value_name="mse",
+        )
+        long_df["transform"] = long_df["transform"].map({
+            "mean_accuracy_svr_cca": "CCA",
+            "mean_accuracy_svr_untransformed": "Untransformed",
+        })
+
+        # Build a combined x-axis category: "<response_range> | <transform>"
+        # so CCA and Untransformed appear adjacent for each response_range.
+        response_ranges = list(svr_df["response_range"].unique())
+        transform_order = ["Untransformed", "CCA"]
+        x_order = [f"{rr} | {t}" for rr in response_ranges for t in transform_order]
+        long_df["x_group"] = (
+                long_df["response_range"].astype(str) + " | " + long_df["transform"]
+        )
+
+        region_pairs = sorted(long_df["region_pair"].unique())
+
+        # Larger figure
+        fig_width = max(14, 2.2 * len(x_order))
+        fig_height = 10
+        fig, ax = plt.subplots(figsize=(fig_width, fig_height))
+
+        sns.boxplot(
+            data=long_df,
+            x="x_group",
+            y="mse",
+            hue="region_pair",
+            hue_order=region_pairs,
+            order=x_order,
+            ax=ax,
+        )
+
+        # Visually separate response_range groups with vertical dividers
+        n_transforms = len(transform_order)
+        for i in range(1, len(response_ranges)):
+            ax.axvline(i * n_transforms - 0.5, color="gray",
+                       linestyle="--", linewidth=0.8, alpha=0.6)
+
+        # ── Pairwise statistics across region_pairs within each x_group ──────
+        # Mann–Whitney U (non-parametric, unpaired). All p-values pooled into
+        # a single Bonferroni correction per stimulus.
+        def _mwu_safe(a, b):
+            try:
+                if len(a) < 2 or len(b) < 2:
+                    return np.nan, np.nan
+                res = stats.mannwhitneyu(a, b, alternative="two-sided")
+                return res.statistic, res.pvalue
+            except ValueError:
+                return np.nan, np.nan
+
+        raw_records = []  # (x_group, rp_a, rp_b, stat, p)
+        for xg in x_order:
+            for rp_a, rp_b in combinations(region_pairs, 2):
+                a = long_df.loc[
+                    (long_df["x_group"] == xg) & (long_df["region_pair"] == rp_a),
+                    "mse",
+                ].values
+                b = long_df.loc[
+                    (long_df["x_group"] == xg) & (long_df["region_pair"] == rp_b),
+                    "mse",
+                ].values
+                s, p = _mwu_safe(a, b)
+                raw_records.append((xg, rp_a, rp_b, s, p))
+
+        raw_p = np.array([r[4] for r in raw_records], dtype=float)
+        corr_p = np.full_like(raw_p, np.nan)
+        reject = np.zeros_like(raw_p, dtype=bool)
+        valid_mask = ~np.isnan(raw_p)
+        if valid_mask.sum() > 0:
+            rej, pcorr, _, _ = multipletests(raw_p[valid_mask],
+                                             alpha=0.05, method="bonferroni")
+            corr_p[valid_mask] = pcorr
+            reject[valid_mask] = rej
+
+        def _sig_str(p):
+            if np.isnan(p):
+                return "n/a"
+            if p < 0.001:
+                return "***"
+            if p < 0.01:
+                return "**"
+            if p < 0.05:
+                return "*"
+            return "ns"
+
+        # Compute hue x-offsets used by seaborn (matches default dodge layout)
+        n_hue = len(region_pairs)
+        # seaborn box widths default to 0.8 of the category; per-hue width is 0.8/n_hue
+        full_width = 0.8
+        hue_width = full_width / n_hue
+        hue_offsets = {
+            rp: -full_width / 2 + hue_width / 2 + i * hue_width
+            for i, rp in enumerate(region_pairs)
+        }
+
+        # Headroom for brackets
+        y_max = long_df["mse"].max()
+        y_min = long_df["mse"].min()
+        y_range = (y_max - y_min) if (y_max - y_min) > 0 else 1.0
+        step = y_range * 0.05  # vertical gap between stacked brackets
+
+        x_index = {xg: i for i, xg in enumerate(x_order)}
+
+        # Group records by x_group to stack brackets per category
+        for xg in x_order:
+            xi = x_index[xg]
+            # Only annotate significant comparisons to keep the plot readable;
+            # change `if rej:` -> `if True:` to show all (incl. ns).
+            level = 0
+            for (xg_r, rp_a, rp_b, s, p), pc, rej in zip(
+                    raw_records, corr_p, reject
+            ):
+                if xg_r != xg:
+                    continue
+                if not rej:
+                    continue
+                xa = xi + hue_offsets[rp_a]
+                xb = xi + hue_offsets[rp_b]
+                y_bracket = y_max + step * (1 + level)
+                y_text = y_bracket + step * 0.15
+                ax.plot([xa, xa, xb, xb],
+                        [y_bracket - step * 0.2, y_bracket,
+                         y_bracket, y_bracket - step * 0.2],
+                        color="black", linewidth=0.9)
+                ax.text((xa + xb) / 2, y_text, _sig_str(pc),
+                        ha="center", va="bottom", fontsize=9, color="black")
+                level += 1
+
+        # Give y-axis headroom for the brackets
+        # Estimate max level used (cap to avoid runaway when many sig pairs)
+        max_level = 0
+        for xg in x_order:
+            lvl = sum(
+                1 for (xg_r, *_), rej in zip(raw_records, reject)
+                if xg_r == xg and rej
+            )
+            max_level = max(max_level, lvl)
+        ax.set_ylim(top=y_max + step * (1 + max(1, max_level)) + step * 0.6)
+
+        ax.set_xlabel("Response range | Transform", fontsize=12)
+        ax.set_ylabel("MSE (SVR)", fontsize=12)
+        ax.set_title(
+            f"{stim} — SVR MSE: CCA vs Untransformed by region pair\n"
+            f"(Mann–Whitney U between region pairs, Bonferroni-corrected; "
+            f"* p<0.05, ** p<0.01, *** p<0.001)",
+            fontsize=12,
+        )
+        plt.setp(ax.get_xticklabels(), rotation=30, ha="right", fontsize=10)
+
+        # Legend INSIDE the figure
+        ax.legend(title="Region pair", loc="upper left",
+                  frameon=True, framealpha=0.9, fontsize=10, title_fontsize=11)
+
+        plt.tight_layout()
+        plt.savefig(
+            f"{file_path}/CCA_SVR/boxplots_svr_{stim}.png",
+            dpi=300, bbox_inches="tight",
+        )
+        plt.show()
+
+        # ── Console summary ──────────────────────────────────────────────────
+        print(f"\n{stim} — Region-pair comparisons "
+              f"(Mann–Whitney U, Bonferroni-corrected):")
+        header = (f"{'x_group':<40} {'rp A':<20} {'rp B':<20} "
+                  f"{'U':>10} {'p_corr':>12} {'sig':>5}")
+        print(header)
+        print("-" * len(header))
+        for (xg, rp_a, rp_b, s, p), pc, rej in zip(raw_records, corr_p, reject):
+            u_str = "n/a" if np.isnan(s) else f"{s:>10.2f}"
+            p_str = "n/a" if np.isnan(pc) else f"{pc:>12.4f}"
+            print(f"{xg:<40} {str(rp_a):<20} {str(rp_b):<20} "
+                  f"{u_str} {p_str} {_sig_str(pc):>5}")
+
 # Create all visualizations
 # print("Creating box plots for AM and pureTones...")
 # create_boxplots_am_puretones()
@@ -921,6 +970,9 @@ create_delta_heatmap_stims_pairwise_pca()
 
 print("Creating upper triangle boxplots with stats...")
 create_upper_triangle_boxplots()
+
+print("Creating SVR boxplots...")
+create_SVR_boxplots()
 
 print("Plotting example decision boundaries...")
 # plot_example_decision_boundaries()
