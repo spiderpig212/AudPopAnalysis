@@ -14,7 +14,6 @@ import numpy as np
 from sklearn.svm import SVC, LinearSVR
 from sklearn.decomposition import PCA
 from sklearn.model_selection import StratifiedKFold, cross_val_score, KFold
-from sklearn.cross_decomposition import CCA
 from sklearn.model_selection import train_test_split
 from tqdm import tqdm
 import matplotlib.pyplot as plt
@@ -24,7 +23,7 @@ from analysis_class import FiringRateAnalysis
 
 def process_stim_resp(task, file_path):
     """
-    Run the full CCA + SVM pipeline for a single (stim, respRange) combination.
+    Run the full SVM pipeline for a single (stim, respRange) combination.
 
     Parameters
     ----------
@@ -95,7 +94,7 @@ def process_stim_resp(task, file_path):
                             'mean_accuracy_svr_untransformed': np.mean(cv_scores_svr_untransformed),
                             'std_accuracy_svr_untransformed': np.std(cv_scores_svr_untransformed),
                         })
-                    best_svr = max(C_results_svr, key=lambda x: x['mean_accuracy_svr_cca'])
+                    best_svr = max(C_results_svr, key=lambda x: x['mean_accuracy_svr'])
 
                     correlation_data_svr.append({
                         'region1': brainRegion,
@@ -134,22 +133,22 @@ def process_stim_resp(task, file_path):
                             })
 
                         C_df = pd.DataFrame(C_results)
-                        best = max(C_results, key=lambda x: x['mean_accuracy_cca'])
+                        best = max(C_results, key=lambda x: x['mean_accuracy'])
                         best_C_val = best['C']
 
                         # Hyperparameter sweep plot
                         fig = plt.figure(figsize=(10, 6))
                         plt.subplot(1, 2, 1)
-                        plt.plot(C_values, C_df['mean_accuracy_cca'], 'bo-')
+                        plt.plot(C_values, C_df['mean_accuracy'], 'bo-')
                         plt.xlabel('C'); plt.ylabel('Mean Accuracy')
                         plt.title('Hyperparameter Sweep for C')
                         plt.subplot(1, 2, 2)
-                        plt.plot(C_values, C_df['std_accuracy_cca'], 'bo-')
+                        plt.plot(C_values, C_df['std_accuracy'], 'bo-')
                         plt.xlabel('C'); plt.ylabel('Std of Accuracy')
                         plt.title('Hyperparameter Sweep for C')
                         plt.tight_layout()
                         plt.savefig(f"{file_path}/SVC/SVC_C_plots/"
-                                    f"CCA_SVC_hyperparameter_sweep_{session}_{stim}_{respRange}.png")
+                                    f"SVC_hyperparameter_sweep_{session}_{stim}_{respRange}.png")
                         plt.close(fig)
 
 
