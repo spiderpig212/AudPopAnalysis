@@ -242,5 +242,5 @@ def main():
                 df_svr.to_feather(f"{file_path}/SVR/SVR_{stim}.feather")
                 df_svr.to_csv(f"{file_path}/SVR/SVR_{stim}.csv", index=False)
 
-    if __name__ == "__main__":
-        main()
+if __name__ == "__main__":
+    main()
