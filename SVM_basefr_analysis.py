@@ -224,7 +224,7 @@ def main():
         for fut in as_completed(futures):
             stim, respRange = futures[fut]
             try:
-                stim_out, resp_out, corr_data, db_data, corr_data_svr = fut.result()
+                stim_out, resp_out, corr_data, corr_data_svr = fut.result()
             except Exception as e:
                 print(f"Task {stim}/{respRange} failed: {e!r}")
                 raise
