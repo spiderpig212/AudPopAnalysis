@@ -15,9 +15,11 @@ from sklearn.svm import SVC, LinearSVR
 from sklearn.decomposition import PCA
 from sklearn.model_selection import StratifiedKFold, cross_val_score, KFold
 from sklearn.model_selection import train_test_split
+import scipy.stats as stats
 from tqdm import tqdm
 import matplotlib.pyplot as plt
 import pandas as pd
+import pickle
 
 from analysis_class import FiringRateAnalysis
 
@@ -60,6 +62,7 @@ def process_stim_resp(task, file_path):
     correlation_data = []
     decision_boundaries_data = {}
     correlation_data_svr = []
+    correlation_data_RDM = []
 
     for session in uniqSessions:
         session_mask = sessionArray == session
@@ -107,6 +110,8 @@ def process_stim_resp(task, file_path):
                         'best_C': best_svr['C'],
                     })
 
+                stim_length = len(uniqStims)
+                corr_mat = np.ones((stim_length, stim_length))
                 for stim_idx, stim_val in tqdm(list(enumerate(uniqStims)),
                                                desc=f"{stim}/{respRange}/{session}",
                                                leave=False):
@@ -166,7 +171,28 @@ def process_stim_resp(task, file_path):
                             'C': best_C_val,
                         })
 
-    return stim, respRange, correlation_data, correlation_data_svr
+                    # RDM calculations for per-stim work. We go through stim A and stim B, calculate the average firing
+                    # rate per neuron, end up with r_vec which is shape (n_neurons), so averaged over trials with
+                    # one each for A and B, and then calculate Pearson correlation between r_vec_a and r_vec_b. Store in
+                    # matrix for stim pairs where the matrix vals will be symmetrical so only really need upper_tri
+
+                    r_a = brain_resp_array[stim_mask, :]
+                    r_b = brain_resp_array[stim_mask2, :]
+                    r_vec_a = np.mean(r_a, axis=0)
+                    r_vec_b = np.mean(r_b, axis=0)
+                    pearson_r = stats.pearsonr(r_vec_a, r_vec_b)[0]
+                    corr_mat[stim_idx, stim_idx2] = pearson_r
+                correlation_data_RDM.append({
+                    'region1': brainRegion,
+                    'session': session,
+                    'stimulus': stim,
+                    'corr_mat': corr_mat,
+                    'corr_dims': (stim_length, stim_length),
+                    'corr_mat_flattened': corr_mat.flatten(),
+                })
+
+
+    return stim, respRange, correlation_data, correlation_data_svr, correlation_data_RDM
 
 def main():
     response_ranges = ["onset", "sustained", "offset"]
@@ -195,6 +221,7 @@ def main():
 
         per_stim_meta[stim] = {"correlation_data": [],
                                "correlation_data_svr": [],
+                               "RDM_data": [],
                                }
 
         for respRange in response_ranges:
@@ -224,12 +251,13 @@ def main():
         for fut in as_completed(futures):
             stim, respRange = futures[fut]
             try:
-                stim_out, resp_out, corr_data, corr_data_svr = fut.result()
+                stim_out, resp_out, corr_data, corr_data_svr, corr_data_rdm = fut.result()
             except Exception as e:
                 print(f"Task {stim}/{respRange} failed: {e!r}")
                 raise
             per_stim_meta[stim_out]["correlation_data"].extend(corr_data)
             per_stim_meta[stim_out]["correlation_data_svr"].extend(corr_data_svr)
+            per_stim_meta[stim_out]["RDM_data"].extend(corr_data_rdm)
             print(f"Finished {stim_out}/{resp_out} ({len(corr_data)} rows)")
 
     # --- Persist per-stim outputs (parent only — no concurrent writes) ---
@@ -240,6 +268,14 @@ def main():
         df_svr = pd.DataFrame(meta["correlation_data_svr"])
         df_svr.to_feather(f"{file_path}/SVR/SVR_{stim}.feather")
         df_svr.to_csv(f"{file_path}/SVR/SVR_{stim}.csv", index=False)
+        try:
+            df_rdm = pd.DataFrame(meta["RDM_data"])
+            df_rdm.to_feather(f"{file_path}/RDM/RDM_{stim}.feather")
+            df_rdm.to_csv(f"{file_path}/RDM/RDM_{stim}.csv", index=False)
+        except:
+            # If RDM can't be put into a dataframe just drop a pickle file
+            with open(f"{file_path}/RDM/RDM_{stim}.pkl", 'wb') as f:
+                pickle.dump(meta["RDM_data"], f)
 
 if __name__ == "__main__":
     main()

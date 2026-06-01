@@ -19,7 +19,7 @@ stim_types = ['AM', 'pureTones', 'naturalSound']
 
 null_results_df['target_pair'] = null_results_df['target1'] + ' vs ' + null_results_df['target2']
 
-fig, axes = plt.subplots(1, len(stim_types), figsize=(7 * len(stim_types), 6), sharey=True)
+fig, axes = plt.subplots(1, len(stim_types), figsize=(7 * len(stim_types), 8), sharey=True)
 
 for ax, stim in zip(axes, stim_types):
     subset = null_results_df[null_results_df['stimulus'] == stim]
@@ -41,10 +41,11 @@ for ax, stim in zip(axes, stim_types):
         ax=ax,
         palette='Set2',
         linewidth=1.2,
-        legend=False,
+        legend=(ax is axes[0]),  # only the first axis builds a legend
     )
 
     ax.axhline(0, color='red', linestyle='--', linewidth=1.0, alpha=0.7)
+    ax.axhline(-2, color='black', linestyle='--', linewidth=1.0, alpha=0.7)
     ax.set_title(stim, fontsize=13, fontweight='bold')
     ax.set_xlabel('Response Range', fontsize=11)
     ax.set_ylabel('Z-score (diff from null)' if ax == axes[0] else '', fontsize=11)
@@ -77,27 +78,34 @@ for ax, stim in zip(axes, stim_types):
     )
     annotator.apply_and_annotate()
 
-# Shared legend from the last non-empty axis
-# last_ax = next(ax for ax in reversed(axes) if ax.get_legend_handles_labels()[0])
-# handles, labels = last_ax.get_legend_handles_labels()
+# Grab handles/labels from the first axis (the only one that has a legend)
+handles, labels = axes[0].get_legend_handles_labels()
 
-# null_handle = plt.Line2D([0], [0], color='red', linestyle='--', linewidth=1.0, alpha=0.7)
-# handles.append(null_handle)
-# labels.append('Null (z=0)')
+# Remove the per-axis legend so it doesn't appear twice
+leg = axes[0].get_legend()
+if leg is not None:
+    leg.remove()
+
+null_handle = plt.Line2D([0], [0], color='red', linestyle='--', linewidth=1.0, alpha=0.7)
+handles.append(null_handle)
+labels.append('Null (z=0)')
+# labels.append('0.95 (z=-2)')
+
+plt.ylim(-8, 2)
 
 fig.legend(
-    # handles, labels,
+    handles, labels,
     title='Target Pair',
     loc='lower center',
-    bbox_to_anchor=(0.5, -0.12),
-    # ncol=len(labels),
+    bbox_to_anchor=(0.5, -0.02),
+    ncol=len(labels),
     fontsize=9,
     title_fontsize=10,
     frameon=True,
 )
 
 plt.suptitle('Subspace Alignment vs Null Distribution', fontsize=15, fontweight='bold')
-plt.tight_layout()
-plt.savefig(f"{file_path}/CCA_two_region_analysis/CCA_null_distribution_boxplots.png", dpi=300, bbox_inches='tight')
+# plt.tight_layout(rect=[0, 0.03, 1, 0.97])  # reserve room for legend + suptitle
+plt.savefig(f"{file_path}/CCA_two_region_analysis/CCA_null_distribution_boxplots_test.png", dpi=300, bbox_inches='tight')
 plt.show()
 
