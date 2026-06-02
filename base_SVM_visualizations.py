@@ -343,6 +343,20 @@ def create_accuracy_heatmaps():
                     dpi=300, bbox_inches='tight')
         plt.show()
 
+def create_RDM_plots():
+    """
+    Pulls correlation matrices for each session and averages across a brain region to make a general RDM for each stim
+    type and brain area
+    """
+    for stim in ["AM", "pureTones", "naturalSound"]:
+        try:
+            with open(f"{file_path}/RDM/RDM_{stim}.pkl", 'rb') as f:
+                rdm_pkl = pickle.load(f)
+            rdm_df = pd.DataFrame(rdm_pkl)
+        except FileNotFoundError:
+            print(f"No data found for {stim}, skipping.")
+            continue
+
 
 print("Creating upper triangle boxplots with stats...")
 create_upper_triangle_boxplots()

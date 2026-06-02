@@ -182,14 +182,14 @@ def process_stim_resp(task, file_path):
                         r_vec_b = np.mean(r_b, axis=0)
                         pearson_r = stats.pearsonr(r_vec_a, r_vec_b)[0]
                         corr_mat[stim_idx, stim_idx2] = pearson_r
-                    correlation_data_RDM.append({
-                        'region1': brainRegion,
-                        'session': session,
-                        'stimulus': stim,
-                        'corr_mat': corr_mat,
-                        'corr_dims': (stim_length, stim_length),
-                        'corr_mat_flattened': corr_mat.flatten(),
-                    })
+                correlation_data_RDM.append({
+                    'region1': brainRegion,
+                    'session': session,
+                    'stimulus': stim,
+                    'corr_mat': corr_mat,
+                    'corr_dims': (stim_length, stim_length),
+                    'corr_mat_flattened': corr_mat.flatten(),
+                })
 
 
     return stim, respRange, correlation_data, correlation_data_svr, correlation_data_RDM
