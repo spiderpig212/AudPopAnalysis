@@ -171,25 +171,25 @@ def process_stim_resp(task, file_path):
                             'C': best_C_val,
                         })
 
-                    # RDM calculations for per-stim work. We go through stim A and stim B, calculate the average firing
-                    # rate per neuron, end up with r_vec which is shape (n_neurons), so averaged over trials with
-                    # one each for A and B, and then calculate Pearson correlation between r_vec_a and r_vec_b. Store in
-                    # matrix for stim pairs where the matrix vals will be symmetrical so only really need upper_tri
+                        # RDM calculations for per-stim work. We go through stim A and stim B, calculate the average firing
+                        # rate per neuron, end up with r_vec which is shape (n_neurons), so averaged over trials with
+                        # one each for A and B, and then calculate Pearson correlation between r_vec_a and r_vec_b. Store in
+                        # matrix for stim pairs where the matrix vals will be symmetrical so only really need upper_tri
 
-                    r_a = brain_resp_array[stim_mask, :]
-                    r_b = brain_resp_array[stim_mask2, :]
-                    r_vec_a = np.mean(r_a, axis=0)
-                    r_vec_b = np.mean(r_b, axis=0)
-                    pearson_r = stats.pearsonr(r_vec_a, r_vec_b)[0]
-                    corr_mat[stim_idx, stim_idx2] = pearson_r
-                correlation_data_RDM.append({
-                    'region1': brainRegion,
-                    'session': session,
-                    'stimulus': stim,
-                    'corr_mat': corr_mat,
-                    'corr_dims': (stim_length, stim_length),
-                    'corr_mat_flattened': corr_mat.flatten(),
-                })
+                        r_a = brain_resp_array[stim_mask, :]
+                        r_b = brain_resp_array[stim_mask2, :]
+                        r_vec_a = np.mean(r_a, axis=0)
+                        r_vec_b = np.mean(r_b, axis=0)
+                        pearson_r = stats.pearsonr(r_vec_a, r_vec_b)[0]
+                        corr_mat[stim_idx, stim_idx2] = pearson_r
+                    correlation_data_RDM.append({
+                        'region1': brainRegion,
+                        'session': session,
+                        'stimulus': stim,
+                        'corr_mat': corr_mat,
+                        'corr_dims': (stim_length, stim_length),
+                        'corr_mat_flattened': corr_mat.flatten(),
+                    })
 
 
     return stim, respRange, correlation_data, correlation_data_svr, correlation_data_RDM
@@ -270,8 +270,8 @@ def main():
         df_svr.to_csv(f"{file_path}/SVR/SVR_{stim}.csv", index=False)
         try:
             df_rdm = pd.DataFrame(meta["RDM_data"])
-            df_rdm.to_feather(f"{file_path}/RDM/RDM_{stim}.feather")
             df_rdm.to_csv(f"{file_path}/RDM/RDM_{stim}.csv", index=False)
+            df_rdm.to_feather(f"{file_path}/RDM/RDM_{stim}.feather")
         except:
             # If RDM can't be put into a dataframe just drop a pickle file
             with open(f"{file_path}/RDM/RDM_{stim}.pkl", 'wb') as f:

@@ -10,18 +10,6 @@ from analysis_class import FiringRateAnalysis
 fr_db = FiringRateAnalysis(db_suffix="coords_updated")
 file_path = fr_db.figdata_path
 
-import matplotlib.pyplot as plt
-import numpy as np
-import pandas as pd
-import seaborn as sns
-import pickle
-from scipy import stats
-from statsmodels.stats.multitest import multipletests
-from analysis_class import FiringRateAnalysis
-
-fr_db = FiringRateAnalysis(db_suffix="coords_updated")
-file_path = fr_db.figdata_path
-
 def create_upper_triangle_boxplots():
     """
     For each stimulus type, extract upper-triangle values (excluding diagonal)
