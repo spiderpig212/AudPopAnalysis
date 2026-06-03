@@ -189,6 +189,7 @@ def process_stim_resp(task, file_path):
                     'corr_mat': corr_mat,
                     'corr_dims': (stim_length, stim_length),
                     'corr_mat_flattened': corr_mat.flatten(),
+                    'response_range': respRange,
                 })
 
 

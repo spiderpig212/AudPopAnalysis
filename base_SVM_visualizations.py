@@ -343,11 +343,23 @@ def create_accuracy_heatmaps():
                     dpi=300, bbox_inches='tight')
         plt.show()
 
+
 def create_RDM_plots():
     """
-    Pulls correlation matrices for each session and averages across a brain region to make a general RDM for each stim
-    type and brain area
+    Pulls correlation matrices for each session and averages across a brain region
+    to make a general RDM for each stim type and brain area. Then plots:
+      1. Per-stimulus heatmap grid (one panel per brain region) of the
+         session-averaged RDM.
+      2. A combined boxplot across all stimuli of the upper-triangle
+         correlation values, with boxes colored by brain region.
     """
+    # Long-format container for the final combined boxplot
+    boxplot_records = []  # list of dicts: {stimulus, region, corr}
+
+    # Keep a consistent color mapping for regions across figures
+    region_color_map = {}
+    cmap = plt.get_cmap('tab10')
+
     for stim in ["AM", "pureTones", "naturalSound"]:
         try:
             with open(f"{file_path}/RDM/RDM_{stim}.pkl", 'rb') as f:
@@ -357,9 +369,128 @@ def create_RDM_plots():
             print(f"No data found for {stim}, skipping.")
             continue
 
+        if 'corr_mat' not in rdm_df.columns or 'region1' not in rdm_df.columns:
+            print(f"Required columns missing for {stim}, skipping.")
+            continue
+
+        regions = sorted(rdm_df['region1'].dropna().unique().tolist())
+
+        # Register any new regions in the global color map
+        for reg in regions:
+            if reg not in region_color_map:
+                region_color_map[reg] = cmap(len(region_color_map) % 10)
+
+        # Average correlation matrices across sessions per region
+        avg_matrices = {}
+        for region in regions:
+            subset = rdm_df[rdm_df['region1'] == region]
+            mats = []
+            for m in subset['corr_mat']:
+                if m is None:
+                    continue
+                arr = np.asarray(m, dtype=float)
+                if arr.ndim == 2 and arr.shape[0] == arr.shape[1]:
+                    mats.append(arr)
+
+            if not mats:
+                continue
+
+            # Only stack matrices that share the most common shape
+            shapes = [m.shape for m in mats]
+            common_shape = max(set(shapes), key=shapes.count)
+            mats = [m for m in mats if m.shape == common_shape]
+            if not mats:
+                continue
+
+            stacked = np.stack(mats, axis=0)
+            avg_matrices[region] = np.nanmean(stacked, axis=0)
+
+            # Collect upper-triangle values for the combined boxplot
+            upper_idx = np.triu_indices(common_shape[0], k=1)
+            vals = avg_matrices[region][upper_idx]
+            vals = vals[~np.isnan(vals)]
+            for v in vals:
+                boxplot_records.append({
+                    'stimulus': stim,
+                    'region': region,
+                    'corr': float(v),
+                })
+
+        if not avg_matrices:
+            print(f"No valid RDM matrices for {stim}, skipping.")
+            continue
+
+        # Shared color scale across regions for this stimulus
+        all_vals = np.concatenate([m[~np.isnan(m)].ravel()
+                                   for m in avg_matrices.values()])
+        vmin = float(np.nanmin(all_vals))
+        vmax = float(np.nanmax(all_vals))
+
+        # Heatmap grid: one column per region
+        n_cols = len(avg_matrices)
+        sample_shape = next(iter(avg_matrices.values())).shape[0]
+        fig_w = max(5, n_cols * max(4, 0.4 * sample_shape))
+        fig_h = max(4, 0.5 * sample_shape + 2)
+        fig, axes = plt.subplots(1, n_cols, figsize=(fig_w, fig_h),
+                                 squeeze=False)
+
+        last_im = None
+        for ci, (region, mat) in enumerate(avg_matrices.items()):
+            ax = axes[0][ci]
+            im = ax.imshow(mat, cmap='viridis', vmin=vmin, vmax=vmax,
+                           aspect='auto', origin='upper')
+            last_im = im
+            ax.set_title(f"{region}\n(n sessions avg.)", fontsize=14)
+            ax.set_xticks(np.arange(mat.shape[0]))
+            ax.set_yticks(np.arange(mat.shape[0]))
+            ax.tick_params(axis='x', labelrotation=90, labelsize=8)
+            ax.tick_params(axis='y', labelsize=8)
+
+        if last_im is not None:
+            fig.subplots_adjust(right=0.9)
+            cbar_ax = fig.add_axes([0.92, 0.15, 0.015, 0.7])
+            fig.colorbar(last_im, cax=cbar_ax, label='Pearson r')
+
+        fig.suptitle(f'{stim} — Session-averaged RDM per brain region',
+                     fontsize=16, y=0.99)
+        plt.tight_layout(rect=[0, 0, 0.9, 0.95])
+        plt.savefig(f"{file_path}/RDM/RDM_heatmaps_{stim}.png",
+                    dpi=300, bbox_inches='tight')
+        plt.show()
+
+    # ── Combined boxplot across all stimuli ──────────────────────────────
+    if not boxplot_records:
+        print("No RDM data collected; skipping combined boxplot.")
+        return
+
+    box_df = pd.DataFrame(boxplot_records)
+    stim_order = [s for s in ["AM", "pureTones", "naturalSound"]
+                  if s in box_df['stimulus'].unique()]
+    region_order = sorted(box_df['region'].unique().tolist())
+    palette = {reg: region_color_map[reg] for reg in region_order}
+
+    fig, ax = plt.subplots(figsize=(max(6, 2 * len(stim_order) * len(region_order) * 0.5), 6))
+    sns.boxplot(
+        data=box_df,
+        x='stimulus', y='corr', hue='region',
+        order=stim_order, hue_order=region_order,
+        palette=palette, ax=ax,
+    )
+    ax.set_xlabel('Stimulus type')
+    ax.set_ylabel('Pearson correlation (upper triangle)')
+    ax.set_title('RDM upper-triangle correlations by stimulus and brain region')
+    ax.legend(title='Region', loc='best')
+    plt.tight_layout()
+    plt.savefig(f"{file_path}/RDM/RDM_upper_triangle_boxplot.png",
+                dpi=300, bbox_inches='tight')
+    plt.show()
+
 
 print("Creating upper triangle boxplots with stats...")
-create_upper_triangle_boxplots()
+# create_upper_triangle_boxplots()
 
 print("Creating pairwise accuracy heatmaps...")
-create_accuracy_heatmaps()
+# create_accuracy_heatmaps()
+
+print("Creating RDM heatmaps and combined boxplot...")
+create_RDM_plots()
