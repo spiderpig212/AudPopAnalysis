@@ -347,18 +347,22 @@ def create_accuracy_heatmaps():
 def create_RDM_plots():
     """
     Pulls correlation matrices for each session and averages across a brain region
-    to make a general RDM for each stim type and brain area. Then plots:
-      1. Per-stimulus heatmap grid (one panel per brain region) of the
-         session-averaged RDM.
-      2. A combined boxplot across all stimuli of the upper-triangle
-         correlation values, with boxes colored by brain region.
+    to make a general RDM for each stim type, brain area, and response_range.
+    Then plots:
+      1. Per-stimulus heatmap grid (rows = response_range, cols = region) of
+         the session-averaged RDM.
+      2. A per-stimulus boxplot of upper-triangle correlations with
+         response_range on the x-axis and boxes colored by brain region.
     """
-    # Long-format container for the final combined boxplot
-    boxplot_records = []  # list of dicts: {stimulus, region, corr}
+    # Long-format container for boxplots
+    boxplot_records = []  # {stimulus, response_range, region, corr}
 
     # Keep a consistent color mapping for regions across figures
     region_color_map = {}
     cmap = plt.get_cmap('tab10')
+
+    # Desired response_range ordering
+    response_range_order = ['onset', 'sustained', 'offset']
 
     for stim in ["AM", "pureTones", "naturalSound"]:
         try:
@@ -369,121 +373,320 @@ def create_RDM_plots():
             print(f"No data found for {stim}, skipping.")
             continue
 
-        if 'corr_mat' not in rdm_df.columns or 'region1' not in rdm_df.columns:
+        required = {'corr_mat', 'region1', 'response_range'}
+        if not required.issubset(rdm_df.columns):
             print(f"Required columns missing for {stim}, skipping.")
             continue
 
         regions = sorted(rdm_df['region1'].dropna().unique().tolist())
+        # Preserve canonical order but only keep what exists in the data
+        present_ranges = rdm_df['response_range'].dropna().unique().tolist()
+        resp_ranges = [r for r in response_range_order if r in present_ranges]
+        # Append any unexpected response ranges so we still plot them
+        for r in present_ranges:
+            if r not in resp_ranges:
+                resp_ranges.append(r)
+
+        n_sessions = rdm_df['session'].nunique()
 
         # Register any new regions in the global color map
         for reg in regions:
             if reg not in region_color_map:
                 region_color_map[reg] = cmap(len(region_color_map) % 10)
 
-        # Average correlation matrices across sessions per region
+        # Build averaged matrices keyed by (response_range, region)
         avg_matrices = {}
-        for region in regions:
-            subset = rdm_df[rdm_df['region1'] == region]
-            mats = []
-            for m in subset['corr_mat']:
-                if m is None:
+        for resp_range in resp_ranges:
+            for region in regions:
+                subset = rdm_df[
+                    (rdm_df['region1'] == region) &
+                    (rdm_df['response_range'] == resp_range)
+                    ]
+                mats = []
+                for m in subset['corr_mat']:
+                    if m is None:
+                        continue
+                    arr = np.asarray(m, dtype=float)
+                    if arr.ndim == 2 and arr.shape[0] == arr.shape[1]:
+                        mats.append(arr)
+
+                if not mats:
                     continue
-                arr = np.asarray(m, dtype=float)
-                if arr.ndim == 2 and arr.shape[0] == arr.shape[1]:
-                    mats.append(arr)
 
-            if not mats:
-                continue
+                # Only stack matrices that share the most common shape
+                shapes = [m.shape for m in mats]
+                common_shape = max(set(shapes), key=shapes.count)
+                mats = [m for m in mats if m.shape == common_shape]
+                if not mats:
+                    continue
 
-            # Only stack matrices that share the most common shape
-            shapes = [m.shape for m in mats]
-            common_shape = max(set(shapes), key=shapes.count)
-            mats = [m for m in mats if m.shape == common_shape]
-            if not mats:
-                continue
+                stacked = np.stack(mats, axis=0)
+                avg_mat = np.nanmean(stacked, axis=0)
+                avg_matrices[(resp_range, region)] = avg_mat
 
-            stacked = np.stack(mats, axis=0)
-            avg_matrices[region] = np.nanmean(stacked, axis=0)
-
-            # Collect upper-triangle values for the combined boxplot
-            upper_idx = np.triu_indices(common_shape[0], k=1)
-            vals = avg_matrices[region][upper_idx]
-            vals = vals[~np.isnan(vals)]
-            for v in vals:
-                boxplot_records.append({
-                    'stimulus': stim,
-                    'region': region,
-                    'corr': float(v),
-                })
+                # Collect upper-triangle values for the boxplot
+                upper_idx = np.triu_indices(common_shape[0], k=1)
+                vals = avg_mat[upper_idx]
+                vals = vals[~np.isnan(vals)]
+                for v in vals:
+                    boxplot_records.append({
+                        'stimulus': stim,
+                        'response_range': resp_range,
+                        'region': region,
+                        'corr': float(v),
+                    })
 
         if not avg_matrices:
             print(f"No valid RDM matrices for {stim}, skipping.")
             continue
 
-        # Shared color scale across regions for this stimulus
+        # Shared color scale across all panels of this figure
         all_vals = np.concatenate([m[~np.isnan(m)].ravel()
                                    for m in avg_matrices.values()])
         vmin = float(np.nanmin(all_vals))
         vmax = float(np.nanmax(all_vals))
 
-        # Heatmap grid: one column per region
-        n_cols = len(avg_matrices)
+        # Heatmap grid: rows = response_range, cols = region
+        n_rows = len(resp_ranges)
+        n_cols = len(regions)
         sample_shape = next(iter(avg_matrices.values())).shape[0]
         fig_w = max(5, n_cols * max(4, 0.4 * sample_shape))
-        fig_h = max(4, 0.5 * sample_shape + 2)
-        fig, axes = plt.subplots(1, n_cols, figsize=(fig_w, fig_h),
+        fig_h = max(4, n_rows * max(4, 0.45 * sample_shape))
+        fig, axes = plt.subplots(n_rows, n_cols,
+                                 figsize=(fig_w, fig_h),
                                  squeeze=False)
 
         last_im = None
-        for ci, (region, mat) in enumerate(avg_matrices.items()):
-            ax = axes[0][ci]
-            im = ax.imshow(mat, cmap='viridis', vmin=vmin, vmax=vmax,
-                           aspect='auto', origin='upper')
-            last_im = im
-            ax.set_title(f"{region}\n(n sessions avg.)", fontsize=14)
-            ax.set_xticks(np.arange(mat.shape[0]))
-            ax.set_yticks(np.arange(mat.shape[0]))
-            ax.tick_params(axis='x', labelrotation=90, labelsize=8)
-            ax.tick_params(axis='y', labelsize=8)
+        for ri, resp_range in enumerate(resp_ranges):
+            for ci, region in enumerate(regions):
+                ax = axes[ri][ci]
+                key = (resp_range, region)
+                if key not in avg_matrices:
+                    ax.set_axis_off()
+                    ax.set_title(f"{region} | {resp_range}\n(no data)",
+                                 fontsize=12)
+                    continue
+
+                mat = avg_matrices[key]
+                im = ax.imshow(mat, cmap='viridis', vmin=vmin, vmax=vmax,
+                               aspect='auto', origin='upper')
+                last_im = im
+                ax.set_title(f"{region} | {resp_range}", fontsize=14)
+                ax.set_xticks(np.arange(mat.shape[0]))
+                ax.set_yticks(np.arange(mat.shape[0]))
+                ax.tick_params(axis='x', labelrotation=90, labelsize=8)
+                ax.tick_params(axis='y', labelsize=8)
+
+                if ci == 0:
+                    ax.set_ylabel(f"{resp_range}\nstimulus", fontsize=12)
+                if ri == n_rows - 1:
+                    ax.set_xlabel('stimulus', fontsize=12)
 
         if last_im is not None:
             fig.subplots_adjust(right=0.9)
             cbar_ax = fig.add_axes([0.92, 0.15, 0.015, 0.7])
             fig.colorbar(last_im, cax=cbar_ax, label='Pearson r')
 
-        fig.suptitle(f'{stim} — Session-averaged RDM per brain region',
-                     fontsize=16, y=0.99)
-        plt.tight_layout(rect=[0, 0, 0.9, 0.95])
+        fig.suptitle(f'{stim} — Session-averaged RDM '
+                     f'({n_sessions} sessions; rows: response_range, '
+                     f'cols: region)',
+                     fontsize=16, y=0.995)
+        plt.tight_layout(rect=[0, 0, 0.9, 0.97])
         plt.savefig(f"{file_path}/RDM/RDM_heatmaps_{stim}.png",
                     dpi=300, bbox_inches='tight')
         plt.show()
 
-    # ── Combined boxplot across all stimuli ──────────────────────────────
-    if not boxplot_records:
-        print("No RDM data collected; skipping combined boxplot.")
-        return
+        # ── Per-stimulus boxplots ────────────────────────────────────────────
+        if not boxplot_records:
+            print("No RDM data collected; skipping boxplots.")
+            return
 
-    box_df = pd.DataFrame(boxplot_records)
-    stim_order = [s for s in ["AM", "pureTones", "naturalSound"]
-                  if s in box_df['stimulus'].unique()]
-    region_order = sorted(box_df['region'].unique().tolist())
-    palette = {reg: region_color_map[reg] for reg in region_order}
+        box_df = pd.DataFrame(boxplot_records)
+        region_order = sorted(box_df['region'].unique().tolist())
+        palette = {reg: region_color_map[reg] for reg in region_order}
 
-    fig, ax = plt.subplots(figsize=(max(6, 2 * len(stim_order) * len(region_order) * 0.5), 6))
-    sns.boxplot(
-        data=box_df,
-        x='stimulus', y='corr', hue='region',
-        order=stim_order, hue_order=region_order,
-        palette=palette, ax=ax,
-    )
-    ax.set_xlabel('Stimulus type')
-    ax.set_ylabel('Pearson correlation (upper triangle)')
-    ax.set_title('RDM upper-triangle correlations by stimulus and brain region')
-    ax.legend(title='Region', loc='best')
-    plt.tight_layout()
-    plt.savefig(f"{file_path}/RDM/RDM_upper_triangle_boxplot.png",
-                dpi=300, bbox_inches='tight')
-    plt.show()
+        def _mannwhitney_safe(x, y):
+            """Run Mann-Whitney U (unpaired); return (stat, p) or (nan, nan)."""
+            try:
+                if len(x) < 1 or len(y) < 1:
+                    return np.nan, np.nan
+                res = stats.mannwhitneyu(x, y, alternative='two-sided')
+                return res.statistic, res.pvalue
+            except ValueError:
+                return np.nan, np.nan
+
+        def _sig_str(p):
+            if np.isnan(p):
+                return "n/a"
+            if p < 0.001:
+                return "***"
+            if p < 0.01:
+                return "**"
+            if p < 0.05:
+                return "*"
+            return "ns"
+
+        for stim in ["AM", "pureTones", "naturalSound"]:
+            stim_df = box_df[box_df['stimulus'] == stim]
+            if stim_df.empty:
+                continue
+
+            present_ranges = stim_df['response_range'].unique().tolist()
+            x_order = [r for r in response_range_order if r in present_ranges]
+            for r in present_ranges:
+                if r not in x_order:
+                    x_order.append(r)
+
+            # Build group_values[(resp_range, region)] -> np.array of corr vals
+            group_values = {}
+            for resp_range in x_order:
+                for region in region_order:
+                    vals = stim_df[
+                        (stim_df['response_range'] == resp_range) &
+                        (stim_df['region'] == region)
+                        ]['corr'].to_numpy()
+                    if vals.size > 0:
+                        group_values[(resp_range, region)] = vals
+
+            # Pairwise comparisons within each response_range
+            comparisons = []
+            for resp_range in x_order:
+                available = [r for r in region_order
+                             if (resp_range, r) in group_values]
+                for i in range(len(available)):
+                    for j in range(i + 1, len(available)):
+                        reg_a, reg_b = available[i], available[j]
+                        s, p = _mannwhitney_safe(
+                            group_values[(resp_range, reg_a)],
+                            group_values[(resp_range, reg_b)],
+                        )
+                        comparisons.append({
+                            'resp_range': resp_range,
+                            'reg_a': reg_a,
+                            'reg_b': reg_b,
+                            'stat': s,
+                            'p_raw': p,
+                        })
+
+            # Bonferroni correction across all comparisons for this stimulus
+            raw_p_arr = np.array([c['p_raw'] for c in comparisons], dtype=float)
+            corr_p = np.full_like(raw_p_arr, np.nan)
+            reject = np.zeros_like(raw_p_arr, dtype=bool)
+            valid_mask = ~np.isnan(raw_p_arr)
+            if valid_mask.sum() > 0:
+                rej, pvals_corr, _, _ = multipletests(raw_p_arr[valid_mask],
+                                                      alpha=0.05,
+                                                      method='bonferroni')
+                corr_p[valid_mask] = pvals_corr
+                reject[valid_mask] = rej
+            for i, c in enumerate(comparisons):
+                c['p_corr'] = corr_p[i]
+                c['reject'] = bool(reject[i])
+
+            # ── Plot ─────────────────────────────────────────────────────────
+            n_x = len(x_order)
+            n_reg = len(region_order)
+            fig_w = max(6, n_x * max(2.0, 0.9 * n_reg))
+            fig, ax = plt.subplots(figsize=(fig_w, 6))
+
+            total_width = 0.8
+            box_width = total_width / max(n_reg, 1)
+            x_centers = np.arange(1, n_x + 1)
+
+            # Manual boxplots so we know exact x positions for brackets
+            box_positions = {}  # (resp_range, region) -> x position
+            all_vals_flat = []
+            for ri, resp_range in enumerate(x_order):
+                for gi, region in enumerate(region_order):
+                    key = (resp_range, region)
+                    if key not in group_values:
+                        continue
+                    vals = group_values[key]
+                    all_vals_flat.append(vals)
+                    offset = (gi - (n_reg - 1) / 2) * box_width
+                    pos = x_centers[ri] + offset
+                    box_positions[key] = pos
+                    bp = ax.boxplot([vals], positions=[pos],
+                                    widths=box_width * 0.9,
+                                    patch_artist=True, notch=False,
+                                    medianprops=dict(color='black', linewidth=2))
+                    for patch in bp['boxes']:
+                        patch.set_facecolor(palette[region])
+                        patch.set_alpha(0.7)
+
+            # Y-axis range for bracket placement
+            y_max = max(v.max() for v in all_vals_flat)
+            y_min = min(v.min() for v in all_vals_flat)
+            y_range = y_max - y_min if (y_max - y_min) > 0 else 1.0
+
+            bracket_height = y_range * 0.04
+            bracket_gap = y_range * 0.02
+            base_y = y_max + y_range * 0.04
+
+            # Stack brackets per response_range
+            comps_by_rr = {}
+            for c in comparisons:
+                comps_by_rr.setdefault(c['resp_range'], []).append(c)
+
+            max_top = base_y
+            for resp_range, comps in comps_by_rr.items():
+                for level, c in enumerate(comps):
+                    key_a = (resp_range, c['reg_a'])
+                    key_b = (resp_range, c['reg_b'])
+                    if key_a not in box_positions or key_b not in box_positions:
+                        continue
+                    x_a = box_positions[key_a]
+                    x_b = box_positions[key_b]
+                    y_bottom = base_y + level * (bracket_height + bracket_gap)
+                    y_top = y_bottom + bracket_height
+                    ax.plot([x_a, x_a, x_b, x_b],
+                            [y_bottom, y_top, y_top, y_bottom],
+                            color='gray', linewidth=0.8)
+                    ax.text((x_a + x_b) / 2, y_top, _sig_str(c['p_corr']),
+                            ha='center', va='bottom', fontsize=9,
+                            color='#d62728' if c['reject'] else 'gray')
+                    max_top = max(max_top, y_top + y_range * 0.03)
+
+            ax.set_ylim(top=max(y_max + y_range * 0.15, max_top + y_range * 0.05))
+            ax.set_xticks(x_centers)
+            ax.set_xticklabels(x_order, fontsize=10)
+            ax.set_xlim(0.5, n_x + 0.5)
+            ax.set_xlabel('Response range')
+            ax.set_ylabel('Pearson correlation (upper triangle)')
+            ax.set_title(f'{stim} — RDM upper-triangle correlations by '
+                         f'response range and brain region\n'
+                         f'(pairwise Mann-Whitney U within response_range, '
+                         f'Bonferroni-corrected; * p<0.05, ** p<0.01, *** p<0.001)')
+
+            from matplotlib.patches import Patch
+            legend_elements = [Patch(facecolor=palette[reg], alpha=0.7, label=reg)
+                               for reg in region_order]
+            ax.legend(handles=legend_elements, loc='upper right', title='Region')
+
+            plt.tight_layout()
+            plt.savefig(f"{file_path}/RDM/RDM_upper_triangle_boxplot_{stim}_stats.png",
+                        dpi=300, bbox_inches='tight')
+            plt.show()
+
+            # ── Console summary ──────────────────────────────────────────────
+            print(f"\n{stim} — Pairwise region comparisons within each "
+                  f"response_range (Mann-Whitney U, Bonferroni-corrected):")
+            header = (f"{'response_range':<14} {'region A':<12} {'region B':<12} "
+                      f"{'U':>10} {'p_raw':>12} {'p_corr':>12} {'sig':>5}")
+            print(header)
+            print("-" * len(header))
+            for c in comparisons:
+                def _fmt(v, width, prec=4):
+                    if np.isnan(v):
+                        return f"{'n/a':>{width}}"
+                    return f"{v:>{width}.{prec}f}"
+
+                print(f"{str(c['resp_range']):<14} {str(c['reg_a']):<12} "
+                      f"{str(c['reg_b']):<12} "
+                      f"{_fmt(c['stat'], 10, 2)} {_fmt(c['p_raw'], 12)} "
+                      f"{_fmt(c['p_corr'], 12)} {_sig_str(c['p_corr']):>5}")
+
+
 
 
 print("Creating upper triangle boxplots with stats...")

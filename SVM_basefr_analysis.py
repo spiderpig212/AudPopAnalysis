@@ -78,6 +78,7 @@ def process_stim_resp(task, file_path):
                 continue
             region1_neurons = rng.choice(brain_resp_array.shape[1], size=neuron_threshold, replace=False)
             brain_resp_array = brain_resp_array[:, region1_neurons]
+            brain_resp_array = brain_resp_array - brain_resp_array.mean(axis=0)
             if stim in ('naturalSound', 'AM', 'pureTones'):
                 cv = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=42)
                 cv_cont = KFold(n_splits=n_splits, shuffle=True, random_state=42)

@@ -81,6 +81,7 @@ def process_stim_resp(task, file_path):
                 continue
             region1_neurons = rng.choice(brain_resp_array.shape[1], size=neuron_threshold, replace=False)
             brain_resp_array = brain_resp_array[:, region1_neurons]
+            brain_resp_array = brain_resp_array - brain_resp_array.mean(axis=0)
 
             i_local = i
             if brainRegion == "Ventral auditory area":
@@ -98,6 +99,7 @@ def process_stim_resp(task, file_path):
                     continue
                 region2_neurons = rng.choice(brain2_resp_array.shape[1], size=neuron_threshold, replace=False)
                 brain2_resp_array = brain2_resp_array[:, region2_neurons]
+                brain2_resp_array = brain2_resp_array - brain2_resp_array.mean(axis=0)
 
                 significant_df = pd.read_csv(
                     f"{file_path}/CCA_two_region_analysis/cca_primary_auditory_results_backup.csv")
