@@ -9,6 +9,8 @@ from analysis_class import FiringRateAnalysis
 
 fr_db = FiringRateAnalysis(db_suffix="coords_updated")
 file_path = fr_db.figdata_path
+SOUND_CATEGORIES = ['Frogs', 'Crickets', 'Streamside', 'Bubbling', 'Bees']
+EXEMPLARS_PER_CATEGORY = 4
 
 def create_upper_triangle_boxplots():
     """
@@ -19,6 +21,8 @@ def create_upper_triangle_boxplots():
     pairwise Mann-Whitney U tests comparing regions within each
     response_range (unpaired), Bonferroni-corrected across all comparisons.
     """
+    # Canonical response_range ordering for downstream plots
+    response_range_order = ['onset', 'sustained', 'offset']
     for stim in ["AM", "pureTones", "naturalSound"]:
         try:
             ns_df = pd.read_feather(f"{file_path}/SVC/SVC_{stim}.feather")
@@ -28,6 +32,8 @@ def create_upper_triangle_boxplots():
 
         # Use the single-region column `region1`
         regions = sorted(ns_df['region1'].dropna().unique().tolist())
+        # Drop Temporal Association Area from regions
+        regions = [r for r in regions if r != "Temporal association areas"]
         response_ranges = list(ns_df['response_range'].unique())
 
         # Collect upper-triangle values per (response_range, region) group
@@ -40,12 +46,15 @@ def create_upper_triangle_boxplots():
         # group_values[(resp_range, region)] -> np.array of upper-tri mean_accuracy
         group_values = {}
 
+        # For naturalSound: within_between_records[(resp_range, region, pair_type)]
+        within_between_records = {}
+
         for resp_range in response_ranges:
             for region in regions:
                 subset = ns_df[
                     (ns_df['response_range'] == resp_range) &
                     (ns_df['region1'] == region)
-                ]
+                    ]
 
                 if len(subset) == 0:
                     continue
@@ -66,6 +75,33 @@ def create_upper_triangle_boxplots():
 
                 if len(vals) > 0:
                     group_values[(resp_range, region)] = vals
+
+                # Within- vs between-category split (naturalSound only)
+                if stim == "naturalSound":
+                    expected_n = len(SOUND_CATEGORIES) * EXEMPLARS_PER_CATEGORY
+                    if n_stims == expected_n:
+                        row_idx, col_idx = np.triu_indices(n_stims, k=1)
+                        cat_row = row_idx // EXEMPLARS_PER_CATEGORY
+                        cat_col = col_idx // EXEMPLARS_PER_CATEGORY
+                        pair_vals = acc_matrix[row_idx, col_idx]
+
+                        within_mask = (cat_row == cat_col)
+                        between_mask = ~within_mask
+
+                        w = pair_vals[within_mask]
+                        b = pair_vals[between_mask]
+                        w = w[~np.isnan(w)]
+                        b = b[~np.isnan(b)]
+
+                        if len(w) > 0:
+                            within_between_records[(resp_range, region, 'within')] = w
+                        if len(b) > 0:
+                            within_between_records[(resp_range, region, 'between')] = b
+                    else:
+                        print(f"Skipping within/between split for "
+                              f"{region}/{resp_range}: matrix is "
+                              f"{n_stims}×{n_stims}, expected "
+                              f"{expected_n}×{expected_n}.")
 
         if not group_values:
             print(f"No data found for {stim}, skipping.")
@@ -208,7 +244,7 @@ def create_upper_triangle_boxplots():
         from matplotlib.patches import Patch
         legend_elements = [Patch(facecolor=region_colors[reg], alpha=0.7, label=reg)
                            for reg in regions]
-        ax.legend(handles=legend_elements, loc='upper right', title='Region')
+        ax.legend(handles=legend_elements, loc='lower right', title='Region')
 
         ax.set_xlim(0.5, n_x + 0.5)
         plt.tight_layout()
@@ -233,6 +269,283 @@ def create_upper_triangle_boxplots():
                   f"{_fmt(c['stat'], 10, 2)} {_fmt(c['p_raw'], 12)} "
                   f"{_fmt(c['p_corr'], 12)} {_sig_str(c['p_corr']):>5}")
 
+        # ── Natural-sound within- vs between-category boxplots ───────────
+        if stim != "naturalSound" or not within_between_records:
+            continue
+
+        wb_regions = sorted({k[1] for k in within_between_records})
+        wb_resp_ranges_present = {k[0] for k in within_between_records}
+        wb_resp_ranges = [r for r in response_range_order
+                          if r in wb_resp_ranges_present]
+        for r in wb_resp_ranges_present:
+            if r not in wb_resp_ranges:
+                wb_resp_ranges.append(r)
+
+        pair_type_order = ['within', 'between']
+        pair_type_colors = {
+            'within': '#4C72B0',  # blue
+            'between': '#DD8452',  # orange
+        }
+
+        for resp_range in wb_resp_ranges:
+            available_regions = [
+                reg for reg in wb_regions
+                if (resp_range, reg, 'within') in within_between_records
+                   and (resp_range, reg, 'between') in within_between_records
+            ]
+            if not available_regions:
+                continue
+
+            # ── Build comparison lists ──────────────────────────────────
+            # 1) within-vs-between per region (paired in spirit; unpaired test)
+            wb_comparisons = []
+            for reg in available_regions:
+                w = within_between_records[(resp_range, reg, 'within')]
+                b = within_between_records[(resp_range, reg, 'between')]
+                s, p = _mannwhitney_safe(w, b)
+                wb_comparisons.append({
+                    'kind': 'within_vs_between',
+                    'region': reg, 'stat': s, 'p_raw': p,
+                    'n_within': len(w), 'n_between': len(b),
+                })
+
+            # 2) region-vs-region for within values
+            within_region_comps = []
+            for i in range(len(available_regions)):
+                for j in range(i + 1, len(available_regions)):
+                    reg_a, reg_b = available_regions[i], available_regions[j]
+                    x = within_between_records[(resp_range, reg_a, 'within')]
+                    y = within_between_records[(resp_range, reg_b, 'within')]
+                    s, p = _mannwhitney_safe(x, y)
+                    within_region_comps.append({
+                        'kind': 'within_region_vs_region',
+                        'reg_a': reg_a, 'reg_b': reg_b,
+                        'stat': s, 'p_raw': p,
+                        'n_a': len(x), 'n_b': len(y),
+                    })
+
+            # 3) region-vs-region for between values
+            between_region_comps = []
+            for i in range(len(available_regions)):
+                for j in range(i + 1, len(available_regions)):
+                    reg_a, reg_b = available_regions[i], available_regions[j]
+                    x = within_between_records[(resp_range, reg_a, 'between')]
+                    y = within_between_records[(resp_range, reg_b, 'between')]
+                    s, p = _mannwhitney_safe(x, y)
+                    between_region_comps.append({
+                        'kind': 'between_region_vs_region',
+                        'reg_a': reg_a, 'reg_b': reg_b,
+                        'stat': s, 'p_raw': p,
+                        'n_a': len(x), 'n_b': len(y),
+                    })
+
+            # Bonferroni-correct across ALL comparisons in this figure
+            all_comps = wb_comparisons + within_region_comps + between_region_comps
+            raw_p = np.array([c['p_raw'] for c in all_comps], dtype=float)
+            corr_p = np.full_like(raw_p, np.nan)
+            reject = np.zeros_like(raw_p, dtype=bool)
+            valid = ~np.isnan(raw_p)
+            if valid.sum() > 0:
+                rej, pcorr, _, _ = multipletests(raw_p[valid], alpha=0.05,
+                                                 method='bonferroni')
+                corr_p[valid] = pcorr
+                reject[valid] = rej
+            for i, c in enumerate(all_comps):
+                c['p_corr'] = corr_p[i]
+                c['reject'] = bool(reject[i])
+
+            # ── Plot ────────────────────────────────────────────────────
+            n_reg_wb = len(available_regions)
+            fig_w = max(6, n_reg_wb * 1.8)
+            fig, ax = plt.subplots(figsize=(fig_w, 7))
+
+            box_width = 0.35
+            x_centers = np.arange(1, n_reg_wb + 1)
+            box_positions = {}  # (region, pair_type) -> x pos
+            all_vals_flat = []
+
+            for ri, reg in enumerate(available_regions):
+                for gi, pt in enumerate(pair_type_order):
+                    vals = within_between_records.get(
+                        (resp_range, reg, pt))
+                    if vals is None or len(vals) == 0:
+                        continue
+                    offset = (gi - 0.5) * box_width
+                    pos = x_centers[ri] + offset
+                    box_positions[(reg, pt)] = pos
+                    all_vals_flat.append(vals)
+                    bp = ax.boxplot(
+                        [vals], positions=[pos],
+                        widths=box_width * 0.9,
+                        patch_artist=True, notch=False,
+                        medianprops=dict(color='black', linewidth=2),
+                    )
+                    for patch in bp['boxes']:
+                        patch.set_facecolor(pair_type_colors[pt])
+                        patch.set_alpha(0.7)
+
+            y_max = max(v.max() for v in all_vals_flat)
+            y_min = min(v.min() for v in all_vals_flat)
+            y_range = y_max - y_min if (y_max - y_min) > 0 else 1.0
+            bracket_height = y_range * 0.035
+            bracket_gap = y_range * 0.015
+            base_y = y_max + y_range * 0.04
+
+            # Bracket colors per comparison kind
+            kind_colors = {
+                'within_vs_between': 'black',
+                'within_region_vs_region': pair_type_colors['within'],
+                'between_region_vs_region': pair_type_colors['between'],
+            }
+
+            current_y = base_y
+
+            # Layer 1: within-vs-between brackets (lowest, per-region pairs)
+            for c in wb_comparisons:
+                reg = c['region']
+                key_w = (reg, 'within')
+                key_b = (reg, 'between')
+                if key_w not in box_positions or key_b not in box_positions:
+                    continue
+                x_a = box_positions[key_w]
+                x_b = box_positions[key_b]
+                y_bottom = current_y
+                y_top = y_bottom + bracket_height
+                color = kind_colors[c['kind']]
+                ax.plot([x_a, x_a, x_b, x_b],
+                        [y_bottom, y_top, y_top, y_bottom],
+                        color=color, linewidth=0.8)
+                ax.text((x_a + x_b) / 2, y_top, _sig_str(c['p_corr']),
+                        ha='center', va='bottom', fontsize=9,
+                        color='#d62728' if c['reject'] else color)
+            max_top_layer1 = current_y + bracket_height + y_range * 0.04
+
+            # Layer 2: stacked region-vs-region for within values
+            level_y = max_top_layer1
+            for level, c in enumerate(within_region_comps):
+                key_a = (c['reg_a'], 'within')
+                key_b = (c['reg_b'], 'within')
+                if key_a not in box_positions or key_b not in box_positions:
+                    continue
+                x_a = box_positions[key_a]
+                x_b = box_positions[key_b]
+                y_bottom = level_y + level * (bracket_height + bracket_gap)
+                y_top = y_bottom + bracket_height
+                color = kind_colors[c['kind']]
+                ax.plot([x_a, x_a, x_b, x_b],
+                        [y_bottom, y_top, y_top, y_bottom],
+                        color=color, linewidth=0.8)
+                ax.text((x_a + x_b) / 2, y_top, _sig_str(c['p_corr']),
+                        ha='center', va='bottom', fontsize=9,
+                        color='#d62728' if c['reject'] else color)
+            if within_region_comps:
+                level_y = (level_y
+                           + len(within_region_comps)
+                           * (bracket_height + bracket_gap)
+                           + y_range * 0.03)
+
+            # Layer 3: stacked region-vs-region for between values
+            for level, c in enumerate(between_region_comps):
+                key_a = (c['reg_a'], 'between')
+                key_b = (c['reg_b'], 'between')
+                if key_a not in box_positions or key_b not in box_positions:
+                    continue
+                x_a = box_positions[key_a]
+                x_b = box_positions[key_b]
+                y_bottom = level_y + level * (bracket_height + bracket_gap)
+                y_top = y_bottom + bracket_height
+                color = kind_colors[c['kind']]
+                ax.plot([x_a, x_a, x_b, x_b],
+                        [y_bottom, y_top, y_top, y_bottom],
+                        color=color, linewidth=0.8)
+                ax.text((x_a + x_b) / 2, y_top, _sig_str(c['p_corr']),
+                        ha='center', va='bottom', fontsize=9,
+                        color='#d62728' if c['reject'] else color)
+            top_y = level_y
+            if between_region_comps:
+                top_y = (level_y
+                         + len(between_region_comps)
+                         * (bracket_height + bracket_gap))
+
+            ax.set_ylim(top=max(y_max + y_range * 0.15,
+                                top_y + y_range * 0.05))
+            ax.set_xticks(x_centers)
+            ax.set_xticklabels(available_regions, fontsize=10,
+                               rotation=30, ha='right')
+            ax.set_xlim(0.5, n_reg_wb + 0.5)
+            ax.set_xlabel('Brain region')
+            ax.set_ylabel('mean_accuracy (upper triangle values)')
+            ax.set_title(
+                f'naturalSound — Within- vs between-category SVC accuracy '
+                f'({resp_range})\n'
+                f'(Mann-Whitney U; Bonferroni-corrected across all brackets; '
+                f'* p<0.05, ** p<0.01, *** p<0.001)'
+            )
+
+            from matplotlib.lines import Line2D
+            from matplotlib.patches import Patch
+            legend_elements = [
+                Patch(facecolor=pair_type_colors['within'], alpha=0.7,
+                      label='Within category'),
+                Patch(facecolor=pair_type_colors['between'], alpha=0.7,
+                      label='Between category'),
+                Line2D([0], [0], color='black', lw=1,
+                       label='Within vs between (per region)'),
+                Line2D([0], [0], color=pair_type_colors['within'], lw=1,
+                       label='Region vs region (within)'),
+                Line2D([0], [0], color=pair_type_colors['between'], lw=1,
+                       label='Region vs region (between)'),
+            ]
+            ax.legend(handles=legend_elements, loc='lower right',
+                      fontsize=8, title='Boxes / brackets')
+
+            plt.tight_layout()
+            plt.savefig(
+                f"{file_path}/SVC/Upper_tri/"
+                f"within_vs_between_naturalSound_{resp_range}.png",
+                dpi=300, bbox_inches='tight',
+            )
+            plt.show()
+
+            # ── Console summaries ───────────────────────────────────────
+            def _fmt(v, width, prec=4):
+                if np.isnan(v):
+                    return f"{'n/a':>{width}}"
+                return f"{v:>{width}.{prec}f}"
+
+            print(f"\nnaturalSound — Within vs between category per region "
+                  f"({resp_range}; Mann-Whitney U, Bonferroni-corrected "
+                  f"across all brackets in this figure):")
+            header = (f"{'region':<28} {'n_within':>8} {'n_between':>10} "
+                      f"{'U':>10} {'p_raw':>12} {'p_corr':>12} {'sig':>5}")
+            print(header)
+            print("-" * len(header))
+            for c in wb_comparisons:
+                print(f"{str(c['region']):<28} {c['n_within']:>8d} "
+                      f"{c['n_between']:>10d} "
+                      f"{_fmt(c['stat'], 10, 2)} {_fmt(c['p_raw'], 12)} "
+                      f"{_fmt(c['p_corr'], 12)} {_sig_str(c['p_corr']):>5}")
+
+            print(f"\nnaturalSound — Region-vs-region for WITHIN-category "
+                  f"values ({resp_range}):")
+            header2 = (f"{'region A':<28} {'region B':<28} "
+                       f"{'U':>10} {'p_raw':>12} {'p_corr':>12} {'sig':>5}")
+            print(header2)
+            print("-" * len(header2))
+            for c in within_region_comps:
+                print(f"{str(c['reg_a']):<28} {str(c['reg_b']):<28} "
+                      f"{_fmt(c['stat'], 10, 2)} {_fmt(c['p_raw'], 12)} "
+                      f"{_fmt(c['p_corr'], 12)} {_sig_str(c['p_corr']):>5}")
+
+            print(f"\nnaturalSound — Region-vs-region for BETWEEN-category "
+                  f"values ({resp_range}):")
+            print(header2)
+            print("-" * len(header2))
+            for c in between_region_comps:
+                print(f"{str(c['reg_a']):<28} {str(c['reg_b']):<28} "
+                      f"{_fmt(c['stat'], 10, 2)} {_fmt(c['p_raw'], 12)} "
+                      f"{_fmt(c['p_corr'], 12)} {_sig_str(c['p_corr']):>5}")
+
 def create_accuracy_heatmaps():
     """
     For each stimulus type, plot pairwise `mean_accuracy` heatmaps across all
@@ -249,6 +562,7 @@ def create_accuracy_heatmaps():
             continue
 
         regions = sorted(ns_df['region1'].dropna().unique().tolist())
+        regions = [r for r in regions if r != "Temporal association areas"]
         response_ranges = list(ns_df['response_range'].unique())
 
         # Build the global stimulus index (consistent ordering across panels)
@@ -357,6 +671,10 @@ def create_RDM_plots():
     # Long-format container for boxplots
     boxplot_records = []  # {stimulus, response_range, region, corr}
 
+    # Container for natural-sound within/between records keyed by
+    # (response_range, region, pair_type) -> list of corr values
+    within_between_records = {}
+
     # Keep a consistent color mapping for regions across figures
     region_color_map = {}
     cmap = plt.get_cmap('tab10')
@@ -379,6 +697,7 @@ def create_RDM_plots():
             continue
 
         regions = sorted(rdm_df['region1'].dropna().unique().tolist())
+        regions = [r for r in regions if r != "Temporal association areas"]
         # Preserve canonical order but only keep what exists in the data
         present_ranges = rdm_df['response_range'].dropna().unique().tolist()
         resp_ranges = [r for r in response_range_order if r in present_ranges]
@@ -435,6 +754,31 @@ def create_RDM_plots():
                         'region': region,
                         'corr': float(v),
                     })
+
+                # For natural sounds, also split into within- vs between-category
+                if stim == "naturalSound":
+                    n = common_shape[0]
+                    expected_n = len(SOUND_CATEGORIES) * EXEMPLARS_PER_CATEGORY
+                    if n == expected_n:
+                        row_idx, col_idx = np.triu_indices(n, k=1)
+                        cat_row = row_idx // EXEMPLARS_PER_CATEGORY
+                        cat_col = col_idx // EXEMPLARS_PER_CATEGORY
+                        pair_vals = avg_mat[row_idx, col_idx]
+
+                        within_mask = (cat_row == cat_col)
+                        between_mask = ~within_mask
+
+                        within_vals = pair_vals[within_mask]
+                        between_vals = pair_vals[between_mask]
+                        within_vals = within_vals[~np.isnan(within_vals)]
+                        between_vals = between_vals[~np.isnan(between_vals)]
+
+                        within_between_records[(resp_range, region, 'within')] = within_vals
+                        within_between_records[(resp_range, region, 'between')] = between_vals
+                    else:
+                        print(f"Skipping within/between split for "
+                              f"{region}/{resp_range}: matrix is {n}×{n}, "
+                              f"expected {expected_n}×{expected_n}.")
 
         if not avg_matrices:
             print(f"No valid RDM matrices for {stim}, skipping.")
@@ -661,7 +1005,7 @@ def create_RDM_plots():
             from matplotlib.patches import Patch
             legend_elements = [Patch(facecolor=palette[reg], alpha=0.7, label=reg)
                                for reg in region_order]
-            ax.legend(handles=legend_elements, loc='upper right', title='Region')
+            ax.legend(handles=legend_elements, loc='lower right', title='Region')
 
             plt.tight_layout()
             plt.savefig(f"{file_path}/RDM/RDM_upper_triangle_boxplot_{stim}_stats.png",
@@ -686,14 +1030,287 @@ def create_RDM_plots():
                       f"{_fmt(c['stat'], 10, 2)} {_fmt(c['p_raw'], 12)} "
                       f"{_fmt(c['p_corr'], 12)} {_sig_str(c['p_corr']):>5}")
 
+        # ── Natural-sound within- vs between-category boxplots ───────────
+        if not within_between_records:
+            continue
+
+        wb_regions = sorted({k[1] for k in within_between_records})
+        wb_resp_ranges_present = {k[0] for k in within_between_records}
+        wb_resp_ranges = [r for r in response_range_order
+                          if r in wb_resp_ranges_present]
+
+        pair_type_order = ['within', 'between']
+        pair_type_colors = {
+            'within': '#4C72B0',  # blue
+            'between': '#DD8452',  # orange
+        }
+
+        for resp_range in wb_resp_ranges:
+            # Filter to regions that have both within and between data here
+            available_regions = [
+                reg for reg in wb_regions
+                if (resp_range, reg, 'within') in within_between_records
+                   and (resp_range, reg, 'between') in within_between_records
+            ]
+            if not available_regions:
+                continue
+
+            # ── Build comparison lists ──────────────────────────────────
+            # 1) within-vs-between per region
+            wb_comparisons = []
+            for reg in available_regions:
+                w = within_between_records[(resp_range, reg, 'within')]
+                b = within_between_records[(resp_range, reg, 'between')]
+                s, p = _mannwhitney_safe(w, b)
+                wb_comparisons.append({
+                    'kind': 'within_vs_between',
+                    'region': reg, 'stat': s, 'p_raw': p,
+                    'n_within': len(w), 'n_between': len(b),
+                })
+
+            # 2) region-vs-region for within values
+            within_region_comps = []
+            for i in range(len(available_regions)):
+                for j in range(i + 1, len(available_regions)):
+                    reg_a, reg_b = available_regions[i], available_regions[j]
+                    x = within_between_records[(resp_range, reg_a, 'within')]
+                    y = within_between_records[(resp_range, reg_b, 'within')]
+                    s, p = _mannwhitney_safe(x, y)
+                    within_region_comps.append({
+                        'kind': 'within_region_vs_region',
+                        'reg_a': reg_a, 'reg_b': reg_b,
+                        'stat': s, 'p_raw': p,
+                        'n_a': len(x), 'n_b': len(y),
+                    })
+
+            # 3) region-vs-region for between values
+            between_region_comps = []
+            for i in range(len(available_regions)):
+                for j in range(i + 1, len(available_regions)):
+                    reg_a, reg_b = available_regions[i], available_regions[j]
+                    x = within_between_records[(resp_range, reg_a, 'between')]
+                    y = within_between_records[(resp_range, reg_b, 'between')]
+                    s, p = _mannwhitney_safe(x, y)
+                    between_region_comps.append({
+                        'kind': 'between_region_vs_region',
+                        'reg_a': reg_a, 'reg_b': reg_b,
+                        'stat': s, 'p_raw': p,
+                        'n_a': len(x), 'n_b': len(y),
+                    })
+
+            # Bonferroni-correct across ALL comparisons in this figure
+            all_comps = wb_comparisons + within_region_comps + between_region_comps
+            raw_p = np.array([c['p_raw'] for c in all_comps], dtype=float)
+            corr_p = np.full_like(raw_p, np.nan)
+            reject = np.zeros_like(raw_p, dtype=bool)
+            valid = ~np.isnan(raw_p)
+            if valid.sum() > 0:
+                rej, pcorr, _, _ = multipletests(raw_p[valid], alpha=0.05,
+                                                 method='bonferroni')
+                corr_p[valid] = pcorr
+                reject[valid] = rej
+            for i, c in enumerate(all_comps):
+                c['p_corr'] = corr_p[i]
+                c['reject'] = bool(reject[i])
+
+            # ── Plot ────────────────────────────────────────────────────
+            n_reg = len(available_regions)
+            fig_w = max(6, n_reg * 1.8)
+            fig, ax = plt.subplots(figsize=(fig_w, 7))
+
+            box_width = 0.35
+            x_centers = np.arange(1, n_reg + 1)
+            box_positions = {}  # (region, pair_type) -> x pos
+            all_vals_flat = []
+
+            for ri, reg in enumerate(available_regions):
+                for gi, pt in enumerate(pair_type_order):
+                    vals = within_between_records[(resp_range, reg, pt)]
+                    if len(vals) == 0:
+                        continue
+                    offset = (gi - 0.5) * box_width
+                    pos = x_centers[ri] + offset
+                    box_positions[(reg, pt)] = pos
+                    all_vals_flat.append(vals)
+                    bp = ax.boxplot(
+                        [vals], positions=[pos],
+                        widths=box_width * 0.9,
+                        patch_artist=True, notch=False,
+                        medianprops=dict(color='black', linewidth=2),
+                    )
+                    for patch in bp['boxes']:
+                        patch.set_facecolor(pair_type_colors[pt])
+                        patch.set_alpha(0.7)
+
+            y_max = max(v.max() for v in all_vals_flat)
+            y_min = min(v.min() for v in all_vals_flat)
+            y_range = y_max - y_min if (y_max - y_min) > 0 else 1.0
+            bracket_height = y_range * 0.035
+            bracket_gap = y_range * 0.015
+            base_y = y_max + y_range * 0.04
+
+            kind_colors = {
+                'within_vs_between': 'black',
+                'within_region_vs_region': pair_type_colors['within'],
+                'between_region_vs_region': pair_type_colors['between'],
+            }
+
+            current_y = base_y
+
+            # Layer 1: within-vs-between per region (one row of brackets)
+            for c in wb_comparisons:
+                reg = c['region']
+                key_w = (reg, 'within')
+                key_b = (reg, 'between')
+                if key_w not in box_positions or key_b not in box_positions:
+                    continue
+                x_a = box_positions[key_w]
+                x_b = box_positions[key_b]
+                y_bottom = current_y
+                y_top = y_bottom + bracket_height
+                color = kind_colors[c['kind']]
+                ax.plot([x_a, x_a, x_b, x_b],
+                        [y_bottom, y_top, y_top, y_bottom],
+                        color=color, linewidth=0.8)
+                ax.text((x_a + x_b) / 2, y_top, _sig_str(c['p_corr']),
+                        ha='center', va='bottom', fontsize=9,
+                        color='#d62728' if c['reject'] else color)
+            max_top_layer1 = current_y + bracket_height + y_range * 0.04
+
+            # Layer 2: stacked region-vs-region for within values
+            level_y = max_top_layer1
+            for level, c in enumerate(within_region_comps):
+                key_a = (c['reg_a'], 'within')
+                key_b = (c['reg_b'], 'within')
+                if key_a not in box_positions or key_b not in box_positions:
+                    continue
+                x_a = box_positions[key_a]
+                x_b = box_positions[key_b]
+                y_bottom = level_y + level * (bracket_height + bracket_gap)
+                y_top = y_bottom + bracket_height
+                color = kind_colors[c['kind']]
+                ax.plot([x_a, x_a, x_b, x_b],
+                        [y_bottom, y_top, y_top, y_bottom],
+                        color=color, linewidth=0.8)
+                ax.text((x_a + x_b) / 2, y_top, _sig_str(c['p_corr']),
+                        ha='center', va='bottom', fontsize=9,
+                        color='#d62728' if c['reject'] else color)
+            if within_region_comps:
+                level_y = (level_y
+                           + len(within_region_comps)
+                           * (bracket_height + bracket_gap)
+                           + y_range * 0.03)
+
+            # Layer 3: stacked region-vs-region for between values
+            for level, c in enumerate(between_region_comps):
+                key_a = (c['reg_a'], 'between')
+                key_b = (c['reg_b'], 'between')
+                if key_a not in box_positions or key_b not in box_positions:
+                    continue
+                x_a = box_positions[key_a]
+                x_b = box_positions[key_b]
+                y_bottom = level_y + level * (bracket_height + bracket_gap)
+                y_top = y_bottom + bracket_height
+                color = kind_colors[c['kind']]
+                ax.plot([x_a, x_a, x_b, x_b],
+                        [y_bottom, y_top, y_top, y_bottom],
+                        color=color, linewidth=0.8)
+                ax.text((x_a + x_b) / 2, y_top, _sig_str(c['p_corr']),
+                        ha='center', va='bottom', fontsize=9,
+                        color='#d62728' if c['reject'] else color)
+            top_y = level_y
+            if between_region_comps:
+                top_y = (level_y
+                         + len(between_region_comps)
+                         * (bracket_height + bracket_gap))
+
+            ax.set_ylim(top=max(y_max + y_range * 0.15,
+                                top_y + y_range * 0.05))
+            ax.set_xticks(x_centers)
+            ax.set_xticklabels(available_regions, fontsize=10,
+                               rotation=30, ha='right')
+            ax.set_xlim(0.5, n_reg + 0.5)
+            ax.set_xlabel('Brain region')
+            ax.set_ylabel('Pearson correlation (upper triangle)')
+            ax.set_title(
+                f'naturalSound — Within- vs between-category correlations '
+                f'({resp_range})\n'
+                f'(Mann-Whitney U; Bonferroni-corrected across all brackets; '
+                f'* p<0.05, ** p<0.01, *** p<0.001)'
+            )
+
+            from matplotlib.lines import Line2D
+            from matplotlib.patches import Patch
+            legend_elements = [
+                Patch(facecolor=pair_type_colors['within'], alpha=0.7,
+                      label='Within category'),
+                Patch(facecolor=pair_type_colors['between'], alpha=0.7,
+                      label='Between category'),
+                Line2D([0], [0], color='black', lw=1,
+                       label='Within vs between (per region)'),
+                Line2D([0], [0], color=pair_type_colors['within'], lw=1,
+                       label='Region vs region (within)'),
+                Line2D([0], [0], color=pair_type_colors['between'], lw=1,
+                       label='Region vs region (between)'),
+            ]
+            ax.legend(handles=legend_elements, loc='lower right',
+                      fontsize=8, title='Boxes / brackets')
+
+            plt.tight_layout()
+            plt.savefig(
+                f"{file_path}/RDM/RDM_within_vs_between_naturalSound_"
+                f"{resp_range}.png",
+                dpi=300, bbox_inches='tight',
+            )
+            plt.show()
+
+            # ── Console summaries ───────────────────────────────────────
+            def _fmt(v, width, prec=4):
+                if np.isnan(v):
+                    return f"{'n/a':>{width}}"
+                return f"{v:>{width}.{prec}f}"
+
+            print(f"\nnaturalSound — Within vs between category per region "
+                  f"({resp_range}; Mann-Whitney U, Bonferroni-corrected "
+                  f"across all brackets in this figure):")
+            header = (f"{'region':<28} {'n_within':>8} {'n_between':>10} "
+                      f"{'U':>10} {'p_raw':>12} {'p_corr':>12} {'sig':>5}")
+            print(header)
+            print("-" * len(header))
+            for c in wb_comparisons:
+                print(f"{str(c['region']):<28} {c['n_within']:>8d} "
+                      f"{c['n_between']:>10d} "
+                      f"{_fmt(c['stat'], 10, 2)} {_fmt(c['p_raw'], 12)} "
+                      f"{_fmt(c['p_corr'], 12)} {_sig_str(c['p_corr']):>5}")
+
+            print(f"\nnaturalSound — Region-vs-region for WITHIN-category "
+                  f"values ({resp_range}):")
+            header2 = (f"{'region A':<28} {'region B':<28} "
+                       f"{'U':>10} {'p_raw':>12} {'p_corr':>12} {'sig':>5}")
+            print(header2)
+            print("-" * len(header2))
+            for c in within_region_comps:
+                print(f"{str(c['reg_a']):<28} {str(c['reg_b']):<28} "
+                      f"{_fmt(c['stat'], 10, 2)} {_fmt(c['p_raw'], 12)} "
+                      f"{_fmt(c['p_corr'], 12)} {_sig_str(c['p_corr']):>5}")
+
+            print(f"\nnaturalSound — Region-vs-region for BETWEEN-category "
+                  f"values ({resp_range}):")
+            print(header2)
+            print("-" * len(header2))
+            for c in between_region_comps:
+                print(f"{str(c['reg_a']):<28} {str(c['reg_b']):<28} "
+                      f"{_fmt(c['stat'], 10, 2)} {_fmt(c['p_raw'], 12)} "
+                      f"{_fmt(c['p_corr'], 12)} {_sig_str(c['p_corr']):>5}")
+
 
 
 
 print("Creating upper triangle boxplots with stats...")
-# create_upper_triangle_boxplots()
+create_upper_triangle_boxplots()
 
 print("Creating pairwise accuracy heatmaps...")
-# create_accuracy_heatmaps()
+create_accuracy_heatmaps()
 
 print("Creating RDM heatmaps and combined boxplot...")
 create_RDM_plots()

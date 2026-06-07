@@ -10,6 +10,9 @@ from analysis_class import FiringRateAnalysis
 fr_db = FiringRateAnalysis(db_suffix="coords_updated")
 file_path = fr_db.figdata_path
 
+SOUND_CATEGORIES = ['Frogs', 'Crickets', 'Streamside', 'Bubbling', 'Bees']
+EXEMPLARS_PER_CATEGORY = 4
+
 def plot_decision_boundary_scatter(boundary_data, ax=None):
     """Plot scatter plot with decision boundary for 2D visualization"""
     if ax is None:
@@ -79,141 +82,141 @@ def plot_decision_boundary_scatter(boundary_data, ax=None):
     return ax
 
 
-def create_boxplots_am_puretones():
-    """Create box plots for AM and pureTones comparing brain region pairs accuracy values"""
-    # Load data for AM and pureTones
-    for stim in ["AM", "pureTones"]:
-        try:
-            stim_df = pd.read_feather(f"{file_path}/CCA_SVC/CCA_SVM_{stim}.feather")
-        except FileNotFoundError:
-            print(f"No data found for {stim}, skipping boxplot creation.")
-            continue
+# def create_boxplots_am_puretones():
+#     """Create box plots for AM and pureTones comparing brain region pairs accuracy values"""
+#     # Load data for AM and pureTones
+#     for stim in ["AM", "pureTones"]:
+#         try:
+#             stim_df = pd.read_feather(f"{file_path}/CCA_SVC/CCA_SVM_{stim}.feather")
+#         except FileNotFoundError:
+#             print(f"No data found for {stim}, skipping boxplot creation.")
+#             continue
+#
+#         # pt_df = pd.read_feather(f"{file_path}/CCA_correlations_pureTones.feather")
+#
+#         # combined_df = pd.concat([am_df, pt_df], ignore_index=True)
+#
+#         # Get unique region pairs and response ranges
+#         region_pairs = stim_df['region_pair'].unique()
+#         response_ranges = stim_df['response_range'].unique()
+#
+#         # Create figure with subplots
+#         n_pairs = len(region_pairs)
+#         n_ranges = len(response_ranges)
+#         fig, axes = plt.subplots(n_ranges, n_pairs, figsize=(5 * n_pairs, 4 * n_ranges))
+#
+#         if n_ranges == 1:
+#             axes = axes.reshape(1, -1)
+#         if n_pairs == 1:
+#             axes = axes.reshape(-1, 1)
+#
+#         for i, resp_range in enumerate(response_ranges):
+#             for j, region_pair in enumerate(region_pairs):
+#                 ax = axes[i, j]
+#
+#                 # Filter data for this combination
+#                 subset = stim_df[(stim_df['response_range'] == resp_range) &
+#                                      (stim_df['region_pair'] == region_pair)]
+#
+#                 if len(subset) > 0:
+#                     # Create box plot
+#                     sns.boxplot(data=subset, x='stimulus', y='mean_accuracy', ax=ax, palette='Set2')
+#
+#                     # Add chance level line
+#                     chance_level = subset['chance_level'].iloc[0]
+#                     ax.axhline(y=chance_level, color='red', linestyle='--', alpha=0.7, label='Chance')
+#
+#                     ax.set_title(f'{region_pair}\n{resp_range}')
+#                     ax.set_xlabel('Stimulus Type')
+#                     ax.set_ylabel('Classification Accuracy')
+#                     ax.legend()
+#                 else:
+#                     ax.set_title(f'{region_pair}\n{resp_range} (No data)')
+#                     ax.set_xlabel('Stimulus Type')
+#                     ax.set_ylabel('Classification Accuracy')
+#
+#         plt.tight_layout()
+#         plt.savefig(f"{file_path}/CCA_SVC/boxplots/boxplots_{stim}.png", dpi=300, bbox_inches='tight')
+#         plt.show()
 
-        # pt_df = pd.read_feather(f"{file_path}/CCA_correlations_pureTones.feather")
 
-        # combined_df = pd.concat([am_df, pt_df], ignore_index=True)
-
-        # Get unique region pairs and response ranges
-        region_pairs = stim_df['region_pair'].unique()
-        response_ranges = stim_df['response_range'].unique()
-
-        # Create figure with subplots
-        n_pairs = len(region_pairs)
-        n_ranges = len(response_ranges)
-        fig, axes = plt.subplots(n_ranges, n_pairs, figsize=(5 * n_pairs, 4 * n_ranges))
-
-        if n_ranges == 1:
-            axes = axes.reshape(1, -1)
-        if n_pairs == 1:
-            axes = axes.reshape(-1, 1)
-
-        for i, resp_range in enumerate(response_ranges):
-            for j, region_pair in enumerate(region_pairs):
-                ax = axes[i, j]
-
-                # Filter data for this combination
-                subset = stim_df[(stim_df['response_range'] == resp_range) &
-                                     (stim_df['region_pair'] == region_pair)]
-
-                if len(subset) > 0:
-                    # Create box plot
-                    sns.boxplot(data=subset, x='stimulus', y='mean_accuracy', ax=ax, palette='Set2')
-
-                    # Add chance level line
-                    chance_level = subset['chance_level'].iloc[0]
-                    ax.axhline(y=chance_level, color='red', linestyle='--', alpha=0.7, label='Chance')
-
-                    ax.set_title(f'{region_pair}\n{resp_range}')
-                    ax.set_xlabel('Stimulus Type')
-                    ax.set_ylabel('Classification Accuracy')
-                    ax.legend()
-                else:
-                    ax.set_title(f'{region_pair}\n{resp_range} (No data)')
-                    ax.set_xlabel('Stimulus Type')
-                    ax.set_ylabel('Classification Accuracy')
-
-        plt.tight_layout()
-        plt.savefig(f"{file_path}/CCA_SVC/boxplots/boxplots_{stim}.png", dpi=300, bbox_inches='tight')
-        plt.show()
-
-
-def create_heatmap_natural_sounds():
-    """Create heatmap for natural sounds with upper triangle only"""
-    # Load natural sounds data
-    try:
-        ns_df = pd.read_feather(f"{file_path}/CCA_SVC/CCA_SVM_naturalSound.feather")
-    except FileNotFoundError:
-        print("No data found for natural sounds, skipping heatmap creation.")
-        return
-
-    stim_info = fr_db.stim_info['naturalSound']
-    stimVals = stim_info['stimVals']
-
-    # Get unique values
-    region_pairs = ns_df['region_pair'].unique()
-    response_ranges = ns_df['response_range'].unique()
-
-    # Get unique stimuli from the stim_pair column
-    all_stims = set()
-    for stim_pair in ns_df['stim_pair']:
-        all_stims.update(stim_pair)
-    unique_stims = sorted(list(all_stims))
-
-    # Create figure with subplots
-    n_pairs = len(region_pairs)
-    n_ranges = len(response_ranges)
-    fig, axes = plt.subplots(n_ranges, n_pairs, figsize=(6 * n_pairs, 5 * n_ranges))
-
-    if n_ranges == 1:
-        axes = axes.reshape(1, -1)
-    if n_pairs == 1:
-        axes = axes.reshape(-1, 1)
-
-    for i, resp_range in enumerate(response_ranges):
-        for j, region_pair in enumerate(region_pairs):
-            ax = axes[i, j]
-
-            # Filter data for this combination
-            subset = ns_df[(ns_df['response_range'] == resp_range) &
-                           (ns_df['region_pair'] == region_pair)]
-
-            if len(subset) > 0:
-                # Create accuracy matrix
-                n_stims = len(unique_stims)
-                accuracy_matrix = np.full((n_stims, n_stims), np.nan)
-
-                # Fill the matrix with accuracy values
-                for _, row in subset.iterrows():
-                    stim1, stim2 = row['stim_pair']
-                    idx1 = unique_stims.index(stim1)
-                    idx2 = unique_stims.index(stim2)
-                    accuracy_matrix[idx1, idx2] = row['mean_accuracy']
-                    # Since accuracies should be symmetric, fill both positions
-                    accuracy_matrix[idx2, idx1] = row['mean_accuracy']
-
-                # Set diagonal to NaN (no self-comparison)
-                np.fill_diagonal(accuracy_matrix, np.nan)
-
-                # Create mask for upper triangle only
-                mask = np.tril(np.ones_like(accuracy_matrix, dtype=bool))
-
-                # Create heatmap
-                sns.heatmap(accuracy_matrix, mask=mask, annot=True, fmt='.2f',
-                            cmap='viridis', ax=ax, cbar_kws={'label': 'Accuracy'},
-                            xticklabels=[f'{stimVals[int(s)]}' for s in unique_stims],
-                            yticklabels=[f'{stimVals[int(s)]}' for s in unique_stims])
-
-                ax.set_title(f'{region_pair}\n{resp_range}')
-                ax.set_xlabel('Stimulus Value')
-                ax.set_ylabel('Stimulus Value')
-            else:
-                ax.set_title(f'{region_pair}\n{resp_range} (No data)')
-                ax.set_xlabel('Stimulus Value')
-                ax.set_ylabel('Stimulus Value')
-
-    plt.tight_layout()
-    plt.savefig(f"{file_path}/CCA_SVC/heatmap_naturalSounds.png", dpi=400, bbox_inches='tight')
-    plt.show()
+# def create_heatmap_natural_sounds():
+#     """Create heatmap for natural sounds with upper triangle only"""
+#     # Load natural sounds data
+#     try:
+#         ns_df = pd.read_feather(f"{file_path}/CCA_SVC/CCA_SVM_naturalSound.feather")
+#     except FileNotFoundError:
+#         print("No data found for natural sounds, skipping heatmap creation.")
+#         return
+#
+#     stim_info = fr_db.stim_info['naturalSound']
+#     stimVals = stim_info['stimVals']
+#
+#     # Get unique values
+#     region_pairs = ns_df['region_pair'].unique()
+#     response_ranges = ns_df['response_range'].unique()
+#
+#     # Get unique stimuli from the stim_pair column
+#     all_stims = set()
+#     for stim_pair in ns_df['stim_pair']:
+#         all_stims.update(stim_pair)
+#     unique_stims = sorted(list(all_stims))
+#
+#     # Create figure with subplots
+#     n_pairs = len(region_pairs)
+#     n_ranges = len(response_ranges)
+#     fig, axes = plt.subplots(n_ranges, n_pairs, figsize=(6 * n_pairs, 5 * n_ranges))
+#
+#     if n_ranges == 1:
+#         axes = axes.reshape(1, -1)
+#     if n_pairs == 1:
+#         axes = axes.reshape(-1, 1)
+#
+#     for i, resp_range in enumerate(response_ranges):
+#         for j, region_pair in enumerate(region_pairs):
+#             ax = axes[i, j]
+#
+#             # Filter data for this combination
+#             subset = ns_df[(ns_df['response_range'] == resp_range) &
+#                            (ns_df['region_pair'] == region_pair)]
+#
+#             if len(subset) > 0:
+#                 # Create accuracy matrix
+#                 n_stims = len(unique_stims)
+#                 accuracy_matrix = np.full((n_stims, n_stims), np.nan)
+#
+#                 # Fill the matrix with accuracy values
+#                 for _, row in subset.iterrows():
+#                     stim1, stim2 = row['stim_pair']
+#                     idx1 = unique_stims.index(stim1)
+#                     idx2 = unique_stims.index(stim2)
+#                     accuracy_matrix[idx1, idx2] = row['mean_accuracy']
+#                     # Since accuracies should be symmetric, fill both positions
+#                     accuracy_matrix[idx2, idx1] = row['mean_accuracy']
+#
+#                 # Set diagonal to NaN (no self-comparison)
+#                 np.fill_diagonal(accuracy_matrix, np.nan)
+#
+#                 # Create mask for upper triangle only
+#                 mask = np.tril(np.ones_like(accuracy_matrix, dtype=bool))
+#
+#                 # Create heatmap
+#                 sns.heatmap(accuracy_matrix, mask=mask, annot=True, fmt='.2f',
+#                             cmap='viridis', ax=ax, cbar_kws={'label': 'Accuracy'},
+#                             xticklabels=[f'{stimVals[int(s)]}' for s in unique_stims],
+#                             yticklabels=[f'{stimVals[int(s)]}' for s in unique_stims])
+#
+#                 ax.set_title(f'{region_pair}\n{resp_range}')
+#                 ax.set_xlabel('Stimulus Value')
+#                 ax.set_ylabel('Stimulus Value')
+#             else:
+#                 ax.set_title(f'{region_pair}\n{resp_range} (No data)')
+#                 ax.set_xlabel('Stimulus Value')
+#                 ax.set_ylabel('Stimulus Value')
+#
+#     plt.tight_layout()
+#     plt.savefig(f"{file_path}/CCA_SVC/heatmap_naturalSounds.png", dpi=400, bbox_inches='tight')
+#     plt.show()
 
 def create_heatmap_stims_pairwise():
     """Create heatmap for natural sounds with upper triangle only"""
