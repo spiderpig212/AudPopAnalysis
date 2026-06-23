@@ -623,7 +623,7 @@ def create_accuracy_heatmaps():
                 if key not in matrices:
                     ax.set_axis_off()
                     ax.set_title(f"{region} | {resp_range}\n(no data)",
-                                 fontsize=14)
+                                 fontsize=24)
                     continue
 
                 mat = matrices[key]
@@ -634,8 +634,8 @@ def create_accuracy_heatmaps():
                 ax.set_xticks(np.arange(n_stims))
                 ax.set_yticks(np.arange(n_stims))
                 ax.set_xticklabels(unique_stims, rotation=90, fontsize=14)
-                ax.set_yticklabels(unique_stims, fontsize=14)
-                ax.set_title(f"{region} | {resp_range}", fontsize=18)
+                ax.set_yticklabels(unique_stims, fontsize=20)
+                ax.set_title(f"{region} | {resp_range}", fontsize=20)
 
                 # Only label axes on the outer panels to keep things clean
                 if ci == 0:
@@ -787,8 +787,8 @@ def create_RDM_plots():
         # Shared color scale across all panels of this figure
         all_vals = np.concatenate([m[~np.isnan(m)].ravel()
                                    for m in avg_matrices.values()])
-        vmin = float(np.nanmin(all_vals))
-        vmax = float(np.nanmax(all_vals))
+        vmax = float(np.nanmax(np.abs(all_vals)))
+        vmin = -vmax
 
         # Heatmap grid: rows = response_range, cols = region
         n_rows = len(resp_ranges)
@@ -812,14 +812,14 @@ def create_RDM_plots():
                     continue
 
                 mat = avg_matrices[key]
-                im = ax.imshow(mat, cmap='viridis', vmin=vmin, vmax=vmax,
+                im = ax.imshow(mat, cmap='RdBu_r', vmin=vmin, vmax=vmax,
                                aspect='auto', origin='upper')
                 last_im = im
-                ax.set_title(f"{region} | {resp_range}", fontsize=14)
+                ax.set_title(f"{region} | {resp_range}", fontsize=20)
                 ax.set_xticks(np.arange(mat.shape[0]))
                 ax.set_yticks(np.arange(mat.shape[0]))
-                ax.tick_params(axis='x', labelrotation=90, labelsize=8)
-                ax.tick_params(axis='y', labelsize=8)
+                ax.tick_params(axis='x', labelrotation=90, labelsize=14)
+                ax.tick_params(axis='y', labelsize=14)
 
                 if ci == 0:
                     ax.set_ylabel(f"{resp_range}\nstimulus", fontsize=12)
@@ -830,6 +830,8 @@ def create_RDM_plots():
             fig.subplots_adjust(right=0.9)
             cbar_ax = fig.add_axes([0.92, 0.15, 0.015, 0.7])
             fig.colorbar(last_im, cax=cbar_ax, label='Pearson r')
+            tick_labels = cbar_ax.get_yticklabels()
+            cbar_ax.set_yticklabels(tick_labels, fontsize=16)
 
         fig.suptitle(f'{stim} — Session-averaged RDM '
                      f'({n_sessions} sessions; rows: response_range, '
@@ -1307,10 +1309,10 @@ def create_RDM_plots():
 
 
 print("Creating upper triangle boxplots with stats...")
-create_upper_triangle_boxplots()
+# create_upper_triangle_boxplots()
 
 print("Creating pairwise accuracy heatmaps...")
-create_accuracy_heatmaps()
+# create_accuracy_heatmaps()
 
 print("Creating RDM heatmaps and combined boxplot...")
 create_RDM_plots()

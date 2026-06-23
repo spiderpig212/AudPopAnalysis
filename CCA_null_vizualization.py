@@ -10,11 +10,17 @@ from itertools import combinations
 
 from analysis_class import FiringRateAnalysis
 
-neuron_threshold = 40
+neuron_threshold = 40   
 fr_db = FiringRateAnalysis(db_suffix="coords_updated")
 file_path = fr_db.figdata_path
 
 null_results_df = pd.read_feather(f"{file_path}/CCA_cross_region_projection_similarity.feather")
+
+# If target1 or target2 is Temporal association areas, drop that row from the data frame
+if 'Temporal association areas' in null_results_df['target1'].unique() or 'Temporal association areas' in null_results_df['target2'].unique():
+    null_results_df = null_results_df[~null_results_df['target1'].isin(['Temporal association areas'])]
+    null_results_df = null_results_df[~null_results_df['target2'].isin(['Temporal association areas'])]
+
 stim_types = ['AM', 'pureTones', 'naturalSound']
 
 null_results_df['target_pair'] = null_results_df['target1'] + ' vs ' + null_results_df['target2']
@@ -106,6 +112,6 @@ fig.legend(
 
 plt.suptitle('Subspace Alignment vs Null Distribution', fontsize=15, fontweight='bold')
 # plt.tight_layout(rect=[0, 0.03, 1, 0.97])  # reserve room for legend + suptitle
-plt.savefig(f"{file_path}/CCA_two_region_analysis/CCA_null_distribution_boxplots_test.png", dpi=300, bbox_inches='tight')
+plt.savefig(f"{file_path}/CCA_two_region_analysis/CCA_null_distribution_boxplots_test2.png", dpi=300, bbox_inches='tight')
 plt.show()
 
