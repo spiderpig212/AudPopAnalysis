@@ -36,6 +36,8 @@ for stimulus in stim_types:
     # Rename posterior to also be dorsal instead of treating them as separate areas
     brainRegionArray[brainRegionArray == "Posterior auditory area"] = "Dorsal auditory area"
     uniq_regions = np.unique(brainRegionArray)
+    # Dropping Temporal auditory area
+    uniq_regions = uniq_regions[uniq_regions != "Temporal association areas"]
     uniqStims = np.unique(stim_arrays["stimArray"][0, :])
 
     for response_range in response_ranges:
@@ -75,7 +77,7 @@ for stimulus in stim_types:
                         n_components_target = significant_df.loc[mask_n_comps_target, "significant_components"].iloc[
                             0]
                         n_components_target = np.int64(n_components_target)
-                        if n_components_target < 1:
+                        if n_components_target <= 1:
                             print(
                                 f"[{stimulus}/{response_range}] Skipping session {session}: insufficient significant components for {brain_region} vs {target_region}")
                             continue
@@ -117,7 +119,7 @@ for stimulus in stim_types:
                         "session": session,
                         "rsa_matrix": rsa_matrix_averaged,
                         "brain_region": brain_region,
-                        "target_region1": target_region,
+                        "target_region": target_region,
                         "pair_comparison": f"{brain_region}_{target_region}",
                     })
 

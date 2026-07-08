@@ -610,8 +610,9 @@ def create_upper_triangle_boxplots():
         paired_stats, paired_p = [], []
 
         for label in group_labels:
-            cca_vals = group_values_cca[label]
-            pca_vals = group_values_pca[label]
+            # Need to add jitter on order of 10^-10 to values as median is more or less at 0
+            cca_vals = group_values_cca[label] + np.random.uniform(0, 1e-10, len(cca_vals))
+            pca_vals = group_values_pca[label] + np.random.uniform(0, 1e-10, len(pca_vals))
 
             s, p = _wilcoxon_safe(cca_vals)
             cca_vs0_stats.append(s); cca_vs0_p.append(p)
