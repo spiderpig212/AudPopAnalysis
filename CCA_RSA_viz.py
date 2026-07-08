@@ -1072,8 +1072,347 @@ def plot_natural_sound_within_between(
 
     return fig, axes
 
-# New function to compute null result for RSA where we compute the spearman correlation between two different sessions between the same brain region and different brain regions
-def RSA_null():
+def _session_upper_triangles(rsa_frame, response_range):
+    """
+    Build per-session upper-triangle vectors for every subspace.
+
+    Returns
+    -------
+    dict
+        (brain_region, target_region) -> {session: {
+            'all': np.ndarray upper-triangle values,
+            'within': np.ndarray (naturalSound category split) or None,
+            'between': np.ndarray or None,
+        }}
+    """
+    expected_n = len(SOUND_CATEGORIES) * EXEMPLARS_PER_CATEGORY
+
+    sub_rr = rsa_frame[rsa_frame["response_range"] == response_range]
+    result = {}
+    if sub_rr.empty or "session" not in sub_rr.columns:
+        return result
+
+    subspace_pairs = list(
+        sub_rr[["brain_region", "target_region"]]
+        .drop_duplicates()
+        .itertuples(index=False, name=None)
+    )
+
+    for brain_region, target_region in subspace_pairs:
+        sub = sub_rr[
+            (sub_rr["brain_region"] == brain_region)
+            & (sub_rr["target_region"] == target_region)
+        ]
+        per_session = {}
+        for session, sess_rows in sub.groupby("session"):
+            mats = []
+            for m in sess_rows["rsa_matrix"]:
+                arr = np.asarray(m, dtype=float)
+                if arr.ndim == 2 and arr.shape[0] == arr.shape[1]:
+                    mats.append(arr)
+            if not mats:
+                continue
+            # If a session has multiple matrices, average them
+            avg = np.nanmean(np.stack(mats, axis=0), axis=0)
+            n = avg.shape[0]
+            row_idx, col_idx = np.triu_indices(n, k=1)
+            all_vals = avg[row_idx, col_idx]
+
+            within_vals = between_vals = None
+            if n == expected_n:
+                cat_row = row_idx // EXEMPLARS_PER_CATEGORY
+                cat_col = col_idx // EXEMPLARS_PER_CATEGORY
+                within_mask = cat_row == cat_col
+                within_vals = all_vals[within_mask]
+                between_vals = all_vals[~within_mask]
+
+            per_session[session] = {
+                "all": all_vals,
+                "within": within_vals,
+                "between": between_vals,
+            }
+
+        if per_session:
+            result[(brain_region, target_region)] = per_session
+
+    return result
+
+
+def RSA_null(
+    rsa_frame,
+    stim,
+    real_rho_by_rr=None,
+    response_range_order=None,
+    save_dir=None,
+):
+    """
+    Cross-session null model for RSA Spearman correlations.
+
+    For a given stimulus, correlate per-session upper-triangle RSA vectors
+    across all unique unordered session pairs, under two conditions:
+
+      * same subspace   : session A's (brain_region, target_region) vs
+                          session B's SAME (brain_region, target_region)
+                          -> signal ceiling (reproducible stimulus structure)
+      * diff subspace   : session A's subspace vs session B's DIFFERENT
+                          subspace -> chance floor
+
+    Because sessions are independent recordings, these distributions form a
+    null baseline against which the real (within-session) ρ can be read.
+
+    For naturalSound the same logic is repeated on within- and between-
+    category matched pairs.
+
+    Parameters
+    ----------
+    rsa_frame : pd.DataFrame
+        Must contain 'rsa_matrix', 'response_range', 'brain_region',
+        'target_region', 'session'.
+    stim : str
+        Stimulus type (titles / filenames).
+    real_rho_by_rr : dict, optional
+        {response_range: [real ρ values]} to overlay for comparison.
+    response_range_order : list of str, optional
+        Desired x-axis ordering; extras appended.
+    save_dir : str, optional
+        Directory to save figure + CSV. If None, nothing is saved.
+
+    Returns
+    -------
+    pd.DataFrame of null records, or None if insufficient data.
+    """
+    if "session" not in rsa_frame.columns:
+        print(f"No 'session' column for {stim}; cannot compute RSA null.")
+        return None
+
+    present_ranges = list(rsa_frame["response_range"].unique())
+    if response_range_order is None:
+        resp_ranges = present_ranges
+    else:
+        resp_ranges = [r for r in response_range_order if r in present_ranges]
+        for r in present_ranges:
+            if r not in resp_ranges:
+                resp_ranges.append(r)
+
+    def _spearman_safe(x, y):
+        x = np.asarray(x, dtype=float)
+        y = np.asarray(y, dtype=float)
+        if x.shape != y.shape:
+            return np.nan
+        mask = np.isfinite(x) & np.isfinite(y)
+        if mask.sum() < 3:
+            return np.nan
+        r, _ = stats.spearmanr(x[mask], y[mask])
+        return r
+
+    from itertools import combinations
+
+    value_kinds = ["all"]
+    if stim == "naturalSound":
+        value_kinds += ["within", "between"]
+
+    null_records = []  # tidy rows for CSV
+
+    for resp_range in resp_ranges:
+        sess_tri = _session_upper_triangles(rsa_frame, resp_range)
+        if not sess_tri:
+            continue
+
+        subspaces = list(sess_tri.keys())
+
+        for kind in value_kinds:
+            # ── Same subspace: session-pair correlations within a subspace ──
+            for subsp in subspaces:
+                sessions = list(sess_tri[subsp].keys())
+                for sa, sb in combinations(sessions, 2):
+                    x = sess_tri[subsp][sa][kind]
+                    y = sess_tri[subsp][sb][kind]
+                    if x is None or y is None:
+                        continue
+                    rho = _spearman_safe(x, y)
+                    if np.isnan(rho):
+                        continue
+                    null_records.append({
+                        "response_range": resp_range,
+                        "value_kind": kind,
+                        "condition": "same_subspace",
+                        "subspace_a": f"{subsp[0]}-{subsp[1]}",
+                        "subspace_b": f"{subsp[0]}-{subsp[1]}",
+                        "session_a": sa,
+                        "session_b": sb,
+                        "rho": rho,
+                    })
+
+            # ── Different subspace: cross-subspace, cross-session pairs ──────
+            for subsp_a, subsp_b in combinations(subspaces, 2):
+                sessions_a = list(sess_tri[subsp_a].keys())
+                sessions_b = list(sess_tri[subsp_b].keys())
+                for sa in sessions_a:
+                    for sb in sessions_b:
+                        if sa == sb:
+                            continue  # enforce DIFFERENT sessions
+                        x = sess_tri[subsp_a][sa][kind]
+                        y = sess_tri[subsp_b][sb][kind]
+                        if x is None or y is None:
+                            continue
+                        rho = _spearman_safe(x, y)
+                        if np.isnan(rho):
+                            continue
+                        null_records.append({
+                            "response_range": resp_range,
+                            "value_kind": kind,
+                            "condition": "diff_subspace",
+                            "subspace_a": f"{subsp_a[0]}-{subsp_a[1]}",
+                            "subspace_b": f"{subsp_b[0]}-{subsp_b[1]}",
+                            "session_a": sa,
+                            "session_b": sb,
+                            "rho": rho,
+                        })
+
+    if not null_records:
+        print(f"No cross-session null data for {stim}, skipping.")
+        return None
+
+    null_df = pd.DataFrame(null_records)
+
+    # ── CSV export ───────────────────────────────────────────────────────────
+    if save_dir is not None:
+        csv_path = f"{save_dir}/rsa_null_{stim}_stats.csv"
+        null_df.to_csv(csv_path, index=False)
+        print(f"Null stats table saved to {csv_path}")
+
+    # ── Plotting: one panel per value_kind ───────────────────────────────────
+    condition_order = ["same_subspace", "diff_subspace"]
+    condition_colors = {
+        "same_subspace": "#55A868",   # green (ceiling)
+        "diff_subspace": "#C44E52",   # red (floor)
+    }
+    condition_labels = {
+        "same_subspace": "Same subspace (ceiling)",
+        "diff_subspace": "Diff subspace (floor)",
+    }
+
+    n_panels = len(value_kinds)
+    n_x = len(resp_ranges)
+    panel_w = max(5.0, n_x * 1.6)
+    fig, axes = plt.subplots(
+        1, n_panels,
+        figsize=(panel_w * n_panels, 6),
+        squeeze=False,
+    )
+    axes = axes.ravel()
+
+    box_width = 0.35
+    x_centers = np.arange(1, n_x + 1)
+
+    for panel_idx, kind in enumerate(value_kinds):
+        ax = axes[panel_idx]
+        kind_df = null_df[null_df["value_kind"] == kind]
+
+        all_vals_flat = []
+        for ri, resp_range in enumerate(resp_ranges):
+            for gi, cond in enumerate(condition_order):
+                vals = kind_df[
+                    (kind_df["response_range"] == resp_range)
+                    & (kind_df["condition"] == cond)
+                ]["rho"].to_numpy()
+                if vals.size == 0:
+                    continue
+                all_vals_flat.append(vals)
+                offset = (gi - 0.5) * box_width
+                pos = x_centers[ri] + offset
+                bp = ax.boxplot(
+                    [vals], positions=[pos],
+                    widths=box_width * 0.9,
+                    patch_artist=True, notch=False,
+                    medianprops=dict(color="black", linewidth=2),
+                )
+                for patch in bp["boxes"]:
+                    patch.set_facecolor(condition_colors[cond])
+                    patch.set_alpha(0.7)
+
+        # Overlay the real (within-session) ρ as points, if provided
+        if kind == "all" and real_rho_by_rr is not None:
+            for ri, resp_range in enumerate(resp_ranges):
+                real_vals = real_rho_by_rr.get(resp_range)
+                if real_vals is None or len(real_vals) == 0:
+                    continue
+                jitter = (np.random.rand(len(real_vals)) - 0.5) * box_width
+                ax.scatter(
+                    np.full(len(real_vals), x_centers[ri]) + jitter,
+                    real_vals,
+                    color="black", marker="D", s=28, zorder=5,
+                    label="Real (within-session) ρ"
+                    if ri == 0 else None,
+                )
+
+        ax.axhline(0, color="gray", linewidth=0.8, linestyle="--")
+        ax.set_xticks(x_centers)
+        ax.set_xticklabels([str(r) for r in resp_ranges], fontsize=10)
+        ax.set_xlim(0.5, n_x + 0.5)
+        ax.set_ylim(-1, 1)
+        ax.set_xlabel("Response range")
+        if panel_idx == 0:
+            ax.set_ylabel("Cross-session Spearman ρ (null)")
+        title_kind = {"all": "all pairs",
+                      "within": "within-category",
+                      "between": "between-category"}[kind]
+        ax.set_title(f"{title_kind}")
+
+    from matplotlib.patches import Patch
+    from matplotlib.lines import Line2D
+    legend_elements = [
+        Patch(facecolor=condition_colors[c], alpha=0.7,
+              label=condition_labels[c])
+        for c in condition_order
+    ]
+    if real_rho_by_rr is not None:
+        legend_elements.append(
+            Line2D([0], [0], marker="D", color="black", linestyle="None",
+                   markersize=6, label="Real (within-session) ρ")
+        )
+    fig.legend(
+        handles=legend_elements, loc="lower center",
+        ncol=len(legend_elements), fontsize=9,
+        bbox_to_anchor=(0.5, -0.03),
+    )
+
+    fig.suptitle(
+        f"{stim} - Cross-session RSA null "
+        f"(same vs different subspace; independent sessions)",
+        fontsize=13, y=1.0,
+    )
+    fig.tight_layout(rect=[0, 0.04, 1, 0.97])
+
+    if save_dir is not None:
+        fig_path = f"{save_dir}/rsa_null_{stim}.png"
+        fig.savefig(fig_path, dpi=300, bbox_inches="tight")
+        print(f"Figure saved to {fig_path}")
+
+    # ── Console summary ──────────────────────────────────────────────────────
+    print(f"\n{stim} - Cross-session RSA null summary "
+          f"(median ρ [IQR], n pairs):")
+    header = (f"{'response_range':<14} {'value_kind':<10} {'condition':<16} "
+              f"{'median':>8} {'q25':>8} {'q75':>8} {'n':>6}")
+    print(header)
+    print("-" * len(header))
+    for resp_range in resp_ranges:
+        for kind in value_kinds:
+            for cond in condition_order:
+                vals = null_df[
+                    (null_df["response_range"] == resp_range)
+                    & (null_df["value_kind"] == kind)
+                    & (null_df["condition"] == cond)
+                ]["rho"].to_numpy()
+                if vals.size == 0:
+                    continue
+                print(f"{str(resp_range):<14} {kind:<10} {cond:<16} "
+                      f"{np.median(vals):>8.3f} "
+                      f"{np.percentile(vals, 25):>8.3f} "
+                      f"{np.percentile(vals, 75):>8.3f} "
+                      f"{vals.size:>6d}")
+
+    return null_df
 
 
 def create_RDM_plots():
@@ -1123,13 +1462,21 @@ def create_RDM_plots():
 
         # Compare communication subspaces via upper-triangle boxplots
         # and pairwise Spearman correlations, one set per response_range.
+        real_rho_by_rr = {}
         for response_range in response_range_order:
-            plot_subspace_upper_triangle(
+            result = plot_subspace_upper_triangle(
                 rsa_frame,
                 response_range=response_range,
                 stim=stim,
-                save_dir=f"{file_path}/CCA_RSA/upper_tri",
+                save_dir=f"{file_path}/CCA_RSA",
             )
+            if result is not None:
+                rho = result["rho"]
+                # Collect the unique off-diagonal real ρ values
+                iu = np.triu_indices(rho.shape[0], k=1)
+                real_vals = rho[iu]
+                real_vals = real_vals[np.isfinite(real_vals)]
+                real_rho_by_rr[response_range] = real_vals
 
         # Grouped boxplots: response_range on x-axis, subspaces stacked
         # horizontally and color-coded (one figure per stimulus).
@@ -1147,6 +1494,16 @@ def create_RDM_plots():
             stim=stim,
             response_range_order=response_range_order,
             save_dir=f"{file_path}/CCA_RSA/wb",
+        )
+
+        # Cross-session null model for RSA Spearman correlations,
+        # overlaid against the real within-session ρ values.
+        RSA_null(
+            rsa_frame,
+            stim=stim,
+            real_rho_by_rr=real_rho_by_rr,
+            response_range_order=response_range_order,
+            save_dir=f"{file_path}/CCA_RSA/null",
         )
 
 
