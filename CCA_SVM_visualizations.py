@@ -611,8 +611,8 @@ def create_upper_triangle_boxplots():
 
         for label in group_labels:
             # Need to add jitter on order of 10^-10 to values as median is more or less at 0
-            cca_vals = group_values_cca[label] + np.random.uniform(0, 1e-10, len(cca_vals))
-            pca_vals = group_values_pca[label] + np.random.uniform(0, 1e-10, len(pca_vals))
+            cca_vals = group_values_cca[label] + np.random.uniform(-1e-10, 1e-10, len(cca_vals))
+            pca_vals = group_values_pca[label] + np.random.uniform(-1e-10, 1e-10, len(pca_vals))
 
             s, p = _wilcoxon_safe(cca_vals)
             cca_vs0_stats.append(s); cca_vs0_p.append(p)
@@ -760,6 +760,462 @@ def create_upper_triangle_boxplots():
                   f"{_fmt(pca_vs0_stats[i], 8, 2)} {_fmt(pca_vs0_corr[i], 11)} "
                   f"{_fmt(paired_stats[i], 8, 2)} {_fmt(paired_corr[i], 12)}")
 
+def _cca_svc_within_between(value_kind, response_range_order=None, save_location=None):
+    """
+    Natural-sound within- vs between-category boxplots for CCA SVC.
+
+    One figure (naturalSound only) with one panel per response_range.
+    Within each panel: x-axis = region_pair (communication subspace), with
+    within- and between-category boxes stacked and color-coded.
+
+    Value plotted depends on `value_kind`:
+        'delta'    -> mean_accuracy_cca - mean_accuracy
+        'accuracy' -> mean_accuracy_cca
+
+    Statistics (Bonferroni-corrected across all brackets within a panel):
+        * within vs between (per region_pair)  -> Mann-Whitney U (unpaired)
+        * within A vs within B                 -> Spearman (matched pairs)
+        * between A vs between B               -> Spearman (matched pairs)
+
+    Matched Spearman comparisons are aligned to the intersection of
+    non-NaN stimulus pairs shared by both region_pairs.
+
+    Parameters
+    ----------
+    value_kind : {'delta', 'accuracy'}
+        Which quantity to extract from the CCA SVC accuracy matrices.
+    response_range_order : list of str, optional
+        Desired panel ordering; extras appended.
+    """
+    stim = "naturalSound"
+    expected_n = len(SOUND_CATEGORIES) * EXEMPLARS_PER_CATEGORY
+
+    try:
+        ns_df = pd.read_feather(f"{file_path}/CCA_SVC/CCA_SVM_{stim}.feather")
+    except FileNotFoundError:
+        print(f"No CCA SVC data found for {stim}, skipping.")
+        return None
+
+    present_ranges = list(ns_df["response_range"].unique())
+    if response_range_order is None:
+        resp_ranges = present_ranges
+    else:
+        resp_ranges = [r for r in response_range_order if r in present_ranges]
+        for r in present_ranges:
+            if r not in resp_ranges:
+                resp_ranges.append(r)
+
+    region_pairs = list(ns_df["region_pair"].unique())
+
+    # Global stimulus index (consistent ordering across region_pairs)
+    all_stims = set()
+    for stim_pair in ns_df["stim_pair"]:
+        all_stims.update(stim_pair)
+    unique_stims = sorted(list(all_stims))
+    n_stims = len(unique_stims)
+
+    if n_stims != expected_n:
+        print(
+            f"CCA SVC within/between skipped: {n_stims} stimuli found, "
+            f"expected {expected_n}."
+        )
+        return None
+
+    # Fixed upper-triangle ordering + category masks (shared across region_pairs)
+    row_idx, col_idx = np.triu_indices(n_stims, k=1)
+    cat_row = row_idx // EXEMPLARS_PER_CATEGORY
+    cat_col = col_idx // EXEMPLARS_PER_CATEGORY
+    within_mask = cat_row == cat_col
+    between_mask = ~within_mask
+
+    def _extract_vals(row):
+        if value_kind == "delta":
+            return row["mean_accuracy_cca"] - row["mean_accuracy"]
+        return row["mean_accuracy_cca"]
+
+    # Per (resp_range, region_pair): full-length upper-tri vector (NaN kept)
+    # so matched Spearman can align on shared non-NaN indices.
+    tri_values = {}  # (resp_range, region_pair) -> np.ndarray length len(row_idx)
+    for resp_range in resp_ranges:
+        for region_pair in region_pairs:
+            subset = ns_df[
+                (ns_df["response_range"] == resp_range)
+                & (ns_df["region_pair"] == region_pair)
+            ]
+            if len(subset) == 0:
+                continue
+
+            mat = np.full((n_stims, n_stims), np.nan)
+            for _, row in subset.iterrows():
+                stim1, stim2 = row["stim_pair"]
+                i1 = unique_stims.index(stim1)
+                i2 = unique_stims.index(stim2)
+                v = _extract_vals(row)
+                mat[i1, i2] = v
+                mat[i2, i1] = v
+            np.fill_diagonal(mat, np.nan)
+            tri_values[(resp_range, region_pair)] = mat[row_idx, col_idx]
+
+    if not tri_values:
+        print(f"No CCA SVC within/between data for {stim}, skipping.")
+        return None
+
+    pair_type_colors = {"within": "#4C72B0", "between": "#DD8452"}
+    pair_type_order = ["within", "between"]
+    kind_colors = {
+        "within_vs_between": "black",
+        "within_region_vs_region": pair_type_colors["within"],
+        "between_region_vs_region": pair_type_colors["between"],
+    }
+
+    def _mannwhitney_safe(x, y):
+        try:
+            x = x[np.isfinite(x)]
+            y = y[np.isfinite(y)]
+            if len(x) < 1 or len(y) < 1:
+                return np.nan, np.nan
+            res = stats.mannwhitneyu(x, y, alternative="two-sided")
+            return res.statistic, res.pvalue
+        except ValueError:
+            return np.nan, np.nan
+
+    def _spearman_matched(a, b):
+        """Spearman on shared non-NaN indices of two full-length vectors."""
+        mask = np.isfinite(a) & np.isfinite(b)
+        if mask.sum() < 3:
+            return np.nan, np.nan, int(mask.sum())
+        r, p = stats.spearmanr(a[mask], b[mask])
+        return r, p, int(mask.sum())
+
+    def _sig_str(p):
+        if np.isnan(p):
+            return ""
+        if p < 0.001:
+            return "***"
+        if p < 0.01:
+            return "**"
+        if p < 0.05:
+            return "*"
+        return "ns"
+
+    value_label = ("CCA accuracy - baseline (delta)" if value_kind == "delta"
+                   else "CCA accuracy")
+    file_tag = "delta" if value_kind == "delta" else "accuracy"
+
+    n_panels = len(resp_ranges)
+    max_regions = max(
+        (len({rp for (rr, rp) in tri_values if rr == r}) for r in resp_ranges),
+        default=1,
+    )
+    panel_w = max(4.0, 1.8 * max(max_regions, 1))
+    fig, axes = plt.subplots(
+        1, n_panels, figsize=(panel_w * n_panels, 7), squeeze=False
+    )
+    axes = axes.ravel()
+
+    stat_records = []  # tidy rows for CSV
+    console_blocks = []
+
+    for panel_idx, resp_range in enumerate(resp_ranges):
+        ax = axes[panel_idx]
+
+        available_regions = [
+            rp for rp in region_pairs if (resp_range, rp) in tri_values
+        ]
+        # Split into within/between vectors (NaNs kept for masking positions)
+        within_vecs = {}
+        between_vecs = {}
+        for rp in available_regions:
+            full = tri_values[(resp_range, rp)]
+            within_vecs[rp] = full[within_mask]
+            between_vecs[rp] = full[between_mask]
+
+        # Keep only region_pairs with at least some finite within & between
+        available_regions = [
+            rp for rp in available_regions
+            if np.isfinite(within_vecs[rp]).any()
+            and np.isfinite(between_vecs[rp]).any()
+        ]
+        if not available_regions:
+            ax.set_axis_off()
+            ax.set_title(f"{resp_range}\n(no data)")
+            continue
+
+        # ── Comparisons ──────────────────────────────────────────────────
+        # 1) within vs between per region_pair (Mann-Whitney U)
+        wb_comparisons = []
+        for rp in available_regions:
+            w = within_vecs[rp]
+            b = between_vecs[rp]
+            s, p = _mannwhitney_safe(w, b)
+            wb_comparisons.append({
+                "kind": "within_vs_between", "region": rp,
+                "stat": s, "p_raw": p,
+                "n_within": int(np.isfinite(w).sum()),
+                "n_between": int(np.isfinite(b).sum()),
+            })
+
+        # 2) within A vs within B (Spearman, matched)
+        within_region_comps = []
+        for i in range(len(available_regions)):
+            for j in range(i + 1, len(available_regions)):
+                ra, rb = available_regions[i], available_regions[j]
+                r, p, n = _spearman_matched(within_vecs[ra], within_vecs[rb])
+                within_region_comps.append({
+                    "kind": "within_region_vs_region",
+                    "reg_a": ra, "reg_b": rb,
+                    "stat": r, "p_raw": p, "n_matched": n,
+                })
+
+        # 3) between A vs between B (Spearman, matched)
+        between_region_comps = []
+        for i in range(len(available_regions)):
+            for j in range(i + 1, len(available_regions)):
+                ra, rb = available_regions[i], available_regions[j]
+                r, p, n = _spearman_matched(between_vecs[ra], between_vecs[rb])
+                between_region_comps.append({
+                    "kind": "between_region_vs_region",
+                    "reg_a": ra, "reg_b": rb,
+                    "stat": r, "p_raw": p, "n_matched": n,
+                })
+
+        # Bonferroni across ALL comparisons in this panel
+        all_comps = wb_comparisons + within_region_comps + between_region_comps
+        raw_p = np.array([c["p_raw"] for c in all_comps], dtype=float)
+        corr_p = np.full_like(raw_p, np.nan)
+        reject = np.zeros_like(raw_p, dtype=bool)
+        valid = np.isfinite(raw_p)
+        if valid.sum() > 0:
+            rej, pcorr, _, _ = multipletests(
+                raw_p[valid], alpha=0.05, method="bonferroni"
+            )
+            corr_p[valid] = pcorr
+            reject[valid] = rej
+        for k, c in enumerate(all_comps):
+            c["p_corr"] = corr_p[k]
+            c["reject"] = bool(reject[k])
+
+        # ── Accumulate CSV records ───────────────────────────────────────
+        for c in wb_comparisons:
+            stat_records.append({
+                "response_range": resp_range, "value_kind": value_kind,
+                "comparison_type": "within_vs_between",
+                "region_a": c["region"], "region_b": c["region"],
+                "test": "Mann-Whitney U", "statistic": c["stat"],
+                "n_a": c["n_within"], "n_b": c["n_between"],
+                "p_raw": c["p_raw"], "p_corr": c["p_corr"],
+                "significant": c["reject"],
+            })
+        for comps, ctype in (
+            (within_region_comps, "within_region_vs_region"),
+            (between_region_comps, "between_region_vs_region"),
+        ):
+            for c in comps:
+                stat_records.append({
+                    "response_range": resp_range, "value_kind": value_kind,
+                    "comparison_type": ctype,
+                    "region_a": c["reg_a"], "region_b": c["reg_b"],
+                    "test": "Spearman", "statistic": c["stat"],
+                    "n_a": c["n_matched"], "n_b": c["n_matched"],
+                    "p_raw": c["p_raw"], "p_corr": c["p_corr"],
+                    "significant": c["reject"],
+                })
+
+        # ── Boxplots ─────────────────────────────────────────────────────
+        n_reg = len(available_regions)
+        box_width = 0.35
+        x_centers = np.arange(1, n_reg + 1)
+        box_positions = {}
+        all_vals_flat = []
+        for ri, rp in enumerate(available_regions):
+            for gi, pt in enumerate(pair_type_order):
+                vec = within_vecs[rp] if pt == "within" else between_vecs[rp]
+                vals = vec[np.isfinite(vec)]
+                if vals.size == 0:
+                    continue
+                offset = (gi - 0.5) * box_width
+                pos = x_centers[ri] + offset
+                box_positions[(rp, pt)] = pos
+                all_vals_flat.append(vals)
+                bp = ax.boxplot(
+                    [vals], positions=[pos], widths=box_width * 0.9,
+                    patch_artist=True, notch=False,
+                    medianprops=dict(color="black", linewidth=2),
+                )
+                for patch in bp["boxes"]:
+                    patch.set_facecolor(pair_type_colors[pt])
+                    patch.set_alpha(0.7)
+
+        y_max = max(v.max() for v in all_vals_flat)
+        y_min = min(v.min() for v in all_vals_flat)
+        y_range = y_max - y_min if (y_max - y_min) > 0 else 1.0
+        bracket_height = y_range * 0.035
+        bracket_gap = y_range * 0.015
+        base_y = y_max + y_range * 0.04
+
+        # Layer 1: within vs between per region_pair
+        current_y = base_y
+        for c in wb_comparisons:
+            kw = (c["region"], "within")
+            kb = (c["region"], "between")
+            if kw not in box_positions or kb not in box_positions:
+                continue
+            x_a, x_b = box_positions[kw], box_positions[kb]
+            y_bottom = current_y
+            y_top = y_bottom + bracket_height
+            color = kind_colors[c["kind"]]
+            ax.plot([x_a, x_a, x_b, x_b],
+                    [y_bottom, y_top, y_top, y_bottom],
+                    color=color, linewidth=0.8)
+            ax.text((x_a + x_b) / 2, y_top, _sig_str(c["p_corr"]),
+                    ha="center", va="bottom", fontsize=9,
+                    color="#d62728" if c["reject"] else color)
+        level_y = current_y + bracket_height + y_range * 0.04
+
+        # Layer 2: within A vs within B
+        for level, c in enumerate(within_region_comps):
+            ka = (c["reg_a"], "within")
+            kb = (c["reg_b"], "within")
+            if ka not in box_positions or kb not in box_positions:
+                continue
+            x_a, x_b = box_positions[ka], box_positions[kb]
+            y_bottom = level_y + level * (bracket_height + bracket_gap)
+            y_top = y_bottom + bracket_height
+            color = kind_colors[c["kind"]]
+            ax.plot([x_a, x_a, x_b, x_b],
+                    [y_bottom, y_top, y_top, y_bottom],
+                    color=color, linewidth=0.8)
+            ax.text((x_a + x_b) / 2, y_top, _sig_str(c["p_corr"]),
+                    ha="center", va="bottom", fontsize=9,
+                    color="#d62728" if c["reject"] else color)
+        if within_region_comps:
+            level_y = (level_y
+                       + len(within_region_comps)
+                       * (bracket_height + bracket_gap)
+                       + y_range * 0.03)
+
+        # Layer 3: between A vs between B
+        for level, c in enumerate(between_region_comps):
+            ka = (c["reg_a"], "between")
+            kb = (c["reg_b"], "between")
+            if ka not in box_positions or kb not in box_positions:
+                continue
+            x_a, x_b = box_positions[ka], box_positions[kb]
+            y_bottom = level_y + level * (bracket_height + bracket_gap)
+            y_top = y_bottom + bracket_height
+            color = kind_colors[c["kind"]]
+            ax.plot([x_a, x_a, x_b, x_b],
+                    [y_bottom, y_top, y_top, y_bottom],
+                    color=color, linewidth=0.8)
+            ax.text((x_a + x_b) / 2, y_top, _sig_str(c["p_corr"]),
+                    ha="center", va="bottom", fontsize=9,
+                    color="#d62728" if c["reject"] else color)
+        top_y = level_y
+        if between_region_comps:
+            top_y = (level_y
+                     + len(between_region_comps)
+                     * (bracket_height + bracket_gap))
+
+        if value_kind == "delta":
+            ax.axhline(0, color="gray", linewidth=0.8, linestyle="--")
+        ax.set_ylim(top=max(y_max + y_range * 0.15, top_y + y_range * 0.05))
+        ax.set_xticks(x_centers)
+        ax.set_xticklabels(available_regions, fontsize=9,
+                           rotation=30, ha="right")
+        ax.set_xlim(0.5, n_reg + 0.5)
+        ax.set_xlabel("region_pair (subspace)")
+        if panel_idx == 0:
+            ax.set_ylabel(value_label)
+        ax.set_title(f"{resp_range}")
+
+        console_blocks.append({
+            "resp_range": resp_range, "wb": wb_comparisons,
+            "within": within_region_comps, "between": between_region_comps,
+        })
+
+    from matplotlib.lines import Line2D
+    from matplotlib.patches import Patch
+    legend_elements = [
+        Patch(facecolor=pair_type_colors["within"], alpha=0.7,
+              label="Within category"),
+        Patch(facecolor=pair_type_colors["between"], alpha=0.7,
+              label="Between category"),
+        Line2D([0], [0], color="black", lw=1,
+               label="Within vs between (Mann-Whitney U)"),
+        Line2D([0], [0], color=pair_type_colors["within"], lw=1,
+               label="Region vs region, within (Spearman)"),
+        Line2D([0], [0], color=pair_type_colors["between"], lw=1,
+               label="Region vs region, between (Spearman)"),
+    ]
+    fig.legend(handles=legend_elements, loc="lower center",
+               ncol=3, fontsize=8, title="Boxes / brackets",
+               bbox_to_anchor=(0.5, -0.02))
+
+    fig.suptitle(
+        f"CCA SVC naturalSound - Within- vs between-category ({value_label})\n"
+        f"(Bonferroni-corrected per panel; * p<0.05, ** p<0.01, *** p<0.001)",
+        fontsize=13, y=1.0,
+    )
+    fig.tight_layout(rect=[0, 0.04, 1, 0.98])
+
+    out_dir = f"{file_path}/CCA_SVC/wb"
+    if save_location:
+        out_dir = out_dir + "/" + save_location
+    fig_path = f"{out_dir}/cca_svc_within_between_{file_tag}_{stim}.png"
+    fig.savefig(fig_path, dpi=300, bbox_inches="tight")
+    print(f"Figure saved to {fig_path}")
+    plt.show()
+
+    if stat_records:
+        stats_df = pd.DataFrame(stat_records)
+        csv_path = f"{out_dir}/cca_svc_within_between_{file_tag}_{stim}_stats.csv"
+        stats_df.to_csv(csv_path, index=False)
+        print(f"Stats table saved to {csv_path}")
+
+    # ── Console summaries ────────────────────────────────────────────────────
+    def _fmt(v, width, prec=4):
+        if np.isnan(v):
+            return f"{'n/a':>{width}}"
+        return f"{v:>{width}.{prec}f}"
+
+    for block in console_blocks:
+        rr = block["resp_range"]
+        print(f"\nCCA SVC {value_kind} - {rr}: Within vs between per "
+              f"region_pair (Mann-Whitney U, Bonferroni-corrected):")
+        header = (f"{'region_pair':<28} {'n_within':>8} {'n_between':>10} "
+                  f"{'U':>10} {'p_raw':>12} {'p_corr':>12} {'sig':>5}")
+        print(header)
+        print("-" * len(header))
+        for c in block["wb"]:
+            print(f"{str(c['region']):<28} {c['n_within']:>8d} "
+                  f"{c['n_between']:>10d} "
+                  f"{_fmt(c['stat'], 10, 2)} {_fmt(c['p_raw'], 12)} "
+                  f"{_fmt(c['p_corr'], 12)} {_sig_str(c['p_corr']):>5}")
+
+        header2 = (f"{'region A':<28} {'region B':<28} "
+                   f"{'rho':>10} {'p_raw':>12} {'p_corr':>12} {'sig':>5}")
+        for ctype, comps in (("WITHIN", block["within"]),
+                             ("BETWEEN", block["between"])):
+            print(f"\nCCA SVC {value_kind} - {rr}: Region-vs-region for "
+                  f"{ctype} values (Spearman, matched pairs):")
+            print(header2)
+            print("-" * len(header2))
+            for c in comps:
+                print(f"{str(c['reg_a']):<28} {str(c['reg_b']):<28} "
+                      f"{_fmt(c['stat'], 10, 3)} {_fmt(c['p_raw'], 12)} "
+                      f"{_fmt(c['p_corr'], 12)} {_sig_str(c['p_corr']):>5}")
+
+    return fig, axes
+
+
+def create_cca_svc_within_between_delta(response_range_order=None):
+    """CCA SVC within/between-category boxplots using CCA-delta values."""
+    return _cca_svc_within_between("delta", response_range_order, save_location="cca_delta")
+
+
+def create_cca_svc_within_between_accuracy(response_range_order=None):
+    """CCA SVC within/between-category boxplots using raw CCA accuracy."""
+    return _cca_svc_within_between("accuracy", response_range_order, save_location="svc_accuracy")
 
 def create_SVR_boxplots():
     """
@@ -974,6 +1430,8 @@ create_delta_heatmap_stims_pairwise_pca()
 
 print("Creating upper triangle boxplots with stats...")
 create_upper_triangle_boxplots()
+create_cca_svc_within_between_delta()
+create_cca_svc_within_between_accuracy()
 
 print("Creating SVR boxplots...")
 create_SVR_boxplots()
