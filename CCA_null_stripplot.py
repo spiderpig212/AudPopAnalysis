@@ -21,6 +21,8 @@ if 'Temporal association areas' in null_results_df['target1'].unique() or 'Tempo
 
 stim_types = ['AM', 'pureTones', 'naturalSound']
 
+RESPONSE_RANGE_ORDER = ['onset', 'sustained', 'offset']
+
 null_results_df['target_pair'] = null_results_df['target1'] + ' vs ' + null_results_df['target2']
 
 
@@ -161,7 +163,8 @@ for ax, stim in zip(axes, stim_types):
         ax.set_title(f'{stim}\n(No data)')
         continue
 
-    response_ranges = sorted(subset['response_range'].unique())
+    present_ranges = set(subset['response_range'].unique())
+    response_ranges = [rr for rr in RESPONSE_RANGE_ORDER if rr in present_ranges]
     target_pairs = sorted(subset['target_pair'].unique())
 
     # Stripplot shows every individual data point -- honest for small n

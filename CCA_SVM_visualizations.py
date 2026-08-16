@@ -1,7 +1,9 @@
+"""Visualizes data created by flattened_CCA_SVM_multiprocess.py"""
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import seaborn as sns
+import os
 import pickle
 from scipy import stats
 from statsmodels.stats.multitest import multipletests
@@ -80,143 +82,6 @@ def plot_decision_boundary_scatter(boundary_data, ax=None):
     ax.legend(bbox_to_anchor=(1.05, 1), loc='upper left')
 
     return ax
-
-
-# def create_boxplots_am_puretones():
-#     """Create box plots for AM and pureTones comparing brain region pairs accuracy values"""
-#     # Load data for AM and pureTones
-#     for stim in ["AM", "pureTones"]:
-#         try:
-#             stim_df = pd.read_feather(f"{file_path}/CCA_SVC/CCA_SVM_{stim}.feather")
-#         except FileNotFoundError:
-#             print(f"No data found for {stim}, skipping boxplot creation.")
-#             continue
-#
-#         # pt_df = pd.read_feather(f"{file_path}/CCA_correlations_pureTones.feather")
-#
-#         # combined_df = pd.concat([am_df, pt_df], ignore_index=True)
-#
-#         # Get unique region pairs and response ranges
-#         region_pairs = stim_df['region_pair'].unique()
-#         response_ranges = stim_df['response_range'].unique()
-#
-#         # Create figure with subplots
-#         n_pairs = len(region_pairs)
-#         n_ranges = len(response_ranges)
-#         fig, axes = plt.subplots(n_ranges, n_pairs, figsize=(5 * n_pairs, 4 * n_ranges))
-#
-#         if n_ranges == 1:
-#             axes = axes.reshape(1, -1)
-#         if n_pairs == 1:
-#             axes = axes.reshape(-1, 1)
-#
-#         for i, resp_range in enumerate(response_ranges):
-#             for j, region_pair in enumerate(region_pairs):
-#                 ax = axes[i, j]
-#
-#                 # Filter data for this combination
-#                 subset = stim_df[(stim_df['response_range'] == resp_range) &
-#                                      (stim_df['region_pair'] == region_pair)]
-#
-#                 if len(subset) > 0:
-#                     # Create box plot
-#                     sns.boxplot(data=subset, x='stimulus', y='mean_accuracy', ax=ax, palette='Set2')
-#
-#                     # Add chance level line
-#                     chance_level = subset['chance_level'].iloc[0]
-#                     ax.axhline(y=chance_level, color='red', linestyle='--', alpha=0.7, label='Chance')
-#
-#                     ax.set_title(f'{region_pair}\n{resp_range}')
-#                     ax.set_xlabel('Stimulus Type')
-#                     ax.set_ylabel('Classification Accuracy')
-#                     ax.legend()
-#                 else:
-#                     ax.set_title(f'{region_pair}\n{resp_range} (No data)')
-#                     ax.set_xlabel('Stimulus Type')
-#                     ax.set_ylabel('Classification Accuracy')
-#
-#         plt.tight_layout()
-#         plt.savefig(f"{file_path}/CCA_SVC/boxplots/boxplots_{stim}.png", dpi=300, bbox_inches='tight')
-#         plt.show()
-
-
-# def create_heatmap_natural_sounds():
-#     """Create heatmap for natural sounds with upper triangle only"""
-#     # Load natural sounds data
-#     try:
-#         ns_df = pd.read_feather(f"{file_path}/CCA_SVC/CCA_SVM_naturalSound.feather")
-#     except FileNotFoundError:
-#         print("No data found for natural sounds, skipping heatmap creation.")
-#         return
-#
-#     stim_info = fr_db.stim_info['naturalSound']
-#     stimVals = stim_info['stimVals']
-#
-#     # Get unique values
-#     region_pairs = ns_df['region_pair'].unique()
-#     response_ranges = ns_df['response_range'].unique()
-#
-#     # Get unique stimuli from the stim_pair column
-#     all_stims = set()
-#     for stim_pair in ns_df['stim_pair']:
-#         all_stims.update(stim_pair)
-#     unique_stims = sorted(list(all_stims))
-#
-#     # Create figure with subplots
-#     n_pairs = len(region_pairs)
-#     n_ranges = len(response_ranges)
-#     fig, axes = plt.subplots(n_ranges, n_pairs, figsize=(6 * n_pairs, 5 * n_ranges))
-#
-#     if n_ranges == 1:
-#         axes = axes.reshape(1, -1)
-#     if n_pairs == 1:
-#         axes = axes.reshape(-1, 1)
-#
-#     for i, resp_range in enumerate(response_ranges):
-#         for j, region_pair in enumerate(region_pairs):
-#             ax = axes[i, j]
-#
-#             # Filter data for this combination
-#             subset = ns_df[(ns_df['response_range'] == resp_range) &
-#                            (ns_df['region_pair'] == region_pair)]
-#
-#             if len(subset) > 0:
-#                 # Create accuracy matrix
-#                 n_stims = len(unique_stims)
-#                 accuracy_matrix = np.full((n_stims, n_stims), np.nan)
-#
-#                 # Fill the matrix with accuracy values
-#                 for _, row in subset.iterrows():
-#                     stim1, stim2 = row['stim_pair']
-#                     idx1 = unique_stims.index(stim1)
-#                     idx2 = unique_stims.index(stim2)
-#                     accuracy_matrix[idx1, idx2] = row['mean_accuracy']
-#                     # Since accuracies should be symmetric, fill both positions
-#                     accuracy_matrix[idx2, idx1] = row['mean_accuracy']
-#
-#                 # Set diagonal to NaN (no self-comparison)
-#                 np.fill_diagonal(accuracy_matrix, np.nan)
-#
-#                 # Create mask for upper triangle only
-#                 mask = np.tril(np.ones_like(accuracy_matrix, dtype=bool))
-#
-#                 # Create heatmap
-#                 sns.heatmap(accuracy_matrix, mask=mask, annot=True, fmt='.2f',
-#                             cmap='viridis', ax=ax, cbar_kws={'label': 'Accuracy'},
-#                             xticklabels=[f'{stimVals[int(s)]}' for s in unique_stims],
-#                             yticklabels=[f'{stimVals[int(s)]}' for s in unique_stims])
-#
-#                 ax.set_title(f'{region_pair}\n{resp_range}')
-#                 ax.set_xlabel('Stimulus Value')
-#                 ax.set_ylabel('Stimulus Value')
-#             else:
-#                 ax.set_title(f'{region_pair}\n{resp_range} (No data)')
-#                 ax.set_xlabel('Stimulus Value')
-#                 ax.set_ylabel('Stimulus Value')
-#
-#     plt.tight_layout()
-#     plt.savefig(f"{file_path}/CCA_SVC/heatmap_naturalSounds.png", dpi=400, bbox_inches='tight')
-#     plt.show()
 
 def create_heatmap_stims_pairwise():
     """Create heatmap for natural sounds with upper triangle only"""
@@ -1415,26 +1280,326 @@ def create_SVR_boxplots():
             print(f"{xg:<40} {str(rp_a):<20} {str(rp_b):<20} "
                   f"{u_str} {p_str} {_sig_str(pc):>5}")
 
+def create_decoding_comparison():
+    """
+    For each stimulus and each response_range, build a strip/scatter plot with
+    three x-axis groups:
+        - "Primary AC population"   -> baseline decode (mean_accuracy)
+        - "Primary-Ventral CCA"     -> mean_accuracy_cca for the
+                                       Primary auditory area_vs_Ventral auditory area pair
+        - "Primary-Dorsal CCA"      -> mean_accuracy_cca for the
+                                       Primary auditory area_vs_Dorsal auditory area pair
+
+    Each point corresponds to a single session (no repeated session dates within
+    a group): within a (stimulus, response_range) the values are averaged across
+    all stimulus pairs so each session contributes one value per group.
+
+    The three groups are assumed independent, so an omnibus Kruskal-Wallis test
+    is run, followed by pairwise Mann-Whitney U post-hoc tests (Bonferroni-
+    corrected across the three pairwise comparisons within each plot).
+    """
+    from itertools import combinations
+
+    VENTRAL_PAIR = "Primary auditory area_vs_Ventral auditory area"
+    DORSAL_PAIR = "Primary auditory area_vs_Dorsal auditory area"
+
+    group_order = ["Primary AC population", "Primary-Ventral CCA", "Primary-Dorsal CCA"]
+    group_colors = {
+        "Primary AC population": "#7f7f7f",  # gray
+        "Primary-Ventral CCA": "#1f77b4",    # blue
+        "Primary-Dorsal CCA": "#ff7f0e",     # orange
+    }
+
+    def _sig_str(p):
+        if np.isnan(p):
+            return "n/a"
+        if p < 0.001:
+            return "***"
+        if p < 0.01:
+            return "**"
+        if p < 0.05:
+            return "*"
+        return "ns"
+
+    def _mwu_safe(a, b):
+        try:
+            if len(a) < 1 or len(b) < 1:
+                return np.nan, np.nan
+            res = stats.mannwhitneyu(a, b, alternative="two-sided")
+            return res.statistic, res.pvalue
+        except ValueError:
+            return np.nan, np.nan
+
+    stim_list = ["AM", "pureTones", "naturalSound"]
+
+    # Desired panel ordering for response ranges (extras appended at the end)
+    response_range_order = ["onset", "sustained", "offset"]
+
+    # ── First pass: load data and collect all (stim, response_range) panels ──
+    panels = []  # list of dicts describing each panel to plot
+    for stim in stim_list:
+        try:
+            ns_df = pd.read_feather(f"{file_path}/CCA_SVC/CCA_SVM_{stim}.feather")
+        except FileNotFoundError:
+            print(f"No data found for {stim}, skipping.")
+            continue
+
+        present_ranges = list(ns_df["response_range"].unique())
+        response_ranges = [r for r in response_range_order if r in present_ranges]
+        for r in present_ranges:
+            if r not in response_ranges:
+                response_ranges.append(r)
+
+        for resp_range in response_ranges:
+            rr_df = ns_df[ns_df["response_range"] == resp_range]
+
+            # ── Build per-session values for each group ──────────────────────
+            # CCA groups: average mean_accuracy_cca across stim pairs per session
+            ventral_df = rr_df[rr_df["region_pair"] == VENTRAL_PAIR]
+            dorsal_df = rr_df[rr_df["region_pair"] == DORSAL_PAIR]
+
+            ventral_by_session = (
+                ventral_df.groupby("session")["mean_accuracy_cca"].mean()
+            )
+            dorsal_by_session = (
+                dorsal_df.groupby("session")["mean_accuracy_cca"].mean()
+            )
+
+            # Primary AC population baseline: use rows from either pair that
+            # involve the primary auditory area, but exclude rows where region2
+            # is "Temporal association areas". Average across stim pairs (and
+            # across pairs) so each session contributes a single value.
+            primary_df = rr_df[
+                rr_df["region_pair"].isin([VENTRAL_PAIR, DORSAL_PAIR])
+            ]
+            primary_df = primary_df[
+                primary_df["region2"] != "Temporal association areas"
+                ]
+            primary_by_session = (
+                primary_df.groupby("session")["mean_accuracy"].mean()
+            )
+
+            group_series = {
+                "Primary AC population": primary_by_session,
+                "Primary-Ventral CCA": ventral_by_session,
+                "Primary-Dorsal CCA": dorsal_by_session,
+            }
+
+            group_values = {
+                g: s.values.astype(float)
+                for g, s in group_series.items()
+                if len(s) > 0
+            }
+
+            present_groups = [g for g in group_order if g in group_values]
+            if len(present_groups) < 2:
+                print(f"{stim} | {resp_range}: not enough groups with data, skipping.")
+                continue
+
+            # ── Statistics ───────────────────────────────────────────────────
+            # Omnibus Kruskal-Wallis across present groups
+            kw_stat, kw_p = np.nan, np.nan
+            try:
+                kw_stat, kw_p = stats.kruskal(
+                    *[group_values[g] for g in present_groups]
+                )
+            except ValueError:
+                kw_stat, kw_p = np.nan, np.nan
+
+            # Pairwise Mann-Whitney U, Bonferroni-corrected across all pairs
+            pair_list = list(combinations(present_groups, 2))
+            raw_stats, raw_p = [], []
+            for g_a, g_b in pair_list:
+                s, p = _mwu_safe(group_values[g_a], group_values[g_b])
+                raw_stats.append(s)
+                raw_p.append(p)
+
+            raw_p_arr = np.array(raw_p, dtype=float)
+            corr_p = np.full_like(raw_p_arr, np.nan)
+            reject = np.zeros_like(raw_p_arr, dtype=bool)
+            valid_mask = ~np.isnan(raw_p_arr)
+            if valid_mask.sum() > 0:
+                rej, pcorr, _, _ = multipletests(
+                    raw_p_arr[valid_mask], alpha=0.05, method="bonferroni"
+                )
+                corr_p[valid_mask] = pcorr
+                reject[valid_mask] = rej
+
+            panels.append({
+                "stim": stim,
+                "resp_range": resp_range,
+                "present_groups": present_groups,
+                "group_values": group_values,
+                "kw_stat": kw_stat,
+                "kw_p": kw_p,
+                "pair_list": pair_list,
+                "raw_stats": raw_stats,
+                "corr_p": corr_p,
+                "reject": reject,
+            })
+
+    if not panels:
+        print("No decoding-comparison panels to plot.")
+        return
+
+    # ── Second pass: lay out all panels as subplots on one figure ────────────
+    n_panels = len(panels)
+    n_cols = 3
+    n_rows = int(np.ceil(n_panels / n_cols))
+    fig, axes = plt.subplots(
+        n_rows, n_cols, figsize=(6 * n_cols, 5.5 * n_rows), squeeze=False
+    )
+    axes = axes.ravel()
+
+    for panel_idx, panel in enumerate(panels):
+        ax = axes[panel_idx]
+        present_groups = panel["present_groups"]
+        group_values = panel["group_values"]
+        pair_list = panel["pair_list"]
+        corr_p = panel["corr_p"]
+        reject = panel["reject"]
+
+        positions = {g: i for i, g in enumerate(present_groups)}
+
+        # Build a long-form frame for the strip plot
+        strip_df = pd.DataFrame({
+            "group": np.concatenate(
+                [[g] * len(group_values[g]) for g in present_groups]
+            ),
+            "accuracy": np.concatenate(
+                [group_values[g] for g in present_groups]
+            ),
+        })
+
+        sns.stripplot(
+            data=strip_df, x="group", y="accuracy",
+            order=present_groups, hue="group", hue_order=present_groups,
+            palette=group_colors, legend=False,
+            jitter=0.2, alpha=0.7, size=6, edgecolor="black",
+            linewidth=0.4, ax=ax,
+        )
+
+        # Median markers
+        for g in present_groups:
+            vals = group_values[g]
+            if len(vals) > 0:
+                med = np.median(vals)
+                x_center = positions[g]
+                ax.plot([x_center - 0.25, x_center + 0.25], [med, med],
+                        color="black", linewidth=2, zorder=4)
+
+        # Annotation brackets for pairwise comparisons
+        all_vals_flat = np.concatenate(
+            [group_values[g] for g in present_groups]
+        )
+        y_max = np.nanmax(all_vals_flat)
+        y_min = np.nanmin(all_vals_flat)
+        y_range = (y_max - y_min) if (y_max - y_min) > 0 else 1.0
+        step = y_range * 0.08
+
+        for level, ((g_a, g_b), pc, rej) in enumerate(
+                zip(pair_list, corr_p, reject)
+        ):
+            x_a = positions[g_a]
+            x_b = positions[g_b]
+            y_bracket = y_max + step * (1 + level)
+            ax.plot(
+                [x_a, x_a, x_b, x_b],
+                [y_bracket - step * 0.2, y_bracket, y_bracket,
+                 y_bracket - step * 0.2],
+                color="black", linewidth=0.9, zorder=5,
+            )
+            ax.text(
+                (x_a + x_b) / 2, y_bracket, _sig_str(pc),
+                ha="center", va="bottom", fontsize=11,
+                color="#d62728" if rej else "black", zorder=5,
+            )
+
+        ax.set_ylim(top=y_max + step * (1 + len(pair_list)) + step * 0.5)
+        ax.set_xticklabels(present_groups, rotation=20, ha="right", fontsize=9)
+        ax.set_xlabel("")
+        ax.set_ylabel("Decoding accuracy", fontsize=11)
+
+        kw_p = panel["kw_p"]
+        kw_str = "n/a" if np.isnan(kw_p) else f"{kw_p:.4g}"
+        ax.set_title(
+            f"{panel['stim']} | {panel['resp_range']}\n"
+            f"(Kruskal-Wallis p={kw_str})",
+            fontsize=10,
+        )
+
+    # Hide any unused subplots
+    for idx in range(n_panels, len(axes)):
+        axes[idx].set_visible(False)
+
+    fig.suptitle(
+        "Decoding accuracy by group\n"
+        "(Pairwise Mann-Whitney U, Bonferroni-corrected per panel; "
+        "* p<0.05, ** p<0.01, *** p<0.001)",
+        fontsize=13, y=1.0,
+    )
+    fig.tight_layout(rect=[0, 0, 1, 0.98])
+
+    os.makedirs(f"{file_path}/CCA_SVC/decoding_comparison", exist_ok=True)
+
+    out_path = f"{file_path}/CCA_SVC/decoding_comparison/decoding_comparison_all.png"
+    fig.savefig(out_path, dpi=300, bbox_inches="tight")
+    print(f"\nFigure saved to {out_path}")
+    plt.show()
+
+    # ── Console summary ──────────────────────────────────────────────────────
+    for panel in panels:
+        stim = panel["stim"]
+        resp_range = panel["resp_range"]
+        present_groups = panel["present_groups"]
+        group_values = panel["group_values"]
+        kw_stat = panel["kw_stat"]
+        kw_p = panel["kw_p"]
+        kw_str = "n/a" if np.isnan(kw_p) else f"{kw_p:.4g}"
+
+        print(f"\n{stim} | {resp_range} — Decoding comparison "
+              f"(n sessions per group):")
+        for g in present_groups:
+            print(f"    {g:<24} n={len(group_values[g])}")
+        print(f"  Kruskal-Wallis: H={kw_stat if not np.isnan(kw_stat) else 'n/a'}, "
+              f"p={kw_str}")
+        print(f"  Pairwise (Mann-Whitney U, Bonferroni-corrected):")
+        header = (f"    {'Group A':<24} {'Group B':<24} "
+                  f"{'U':>10} {'p_corr':>12} {'sig':>5}")
+        print(header)
+        print("    " + "-" * (len(header) - 4))
+        for (g_a, g_b), s, pc in zip(
+                panel["pair_list"], panel["raw_stats"], panel["corr_p"]
+        ):
+            u_str = "n/a" if np.isnan(s) else f"{s:>10.2f}"
+            p_str = "n/a" if np.isnan(pc) else f"{pc:>12.4f}"
+            print(f"    {g_a:<24} {g_b:<24} {u_str} {p_str} "
+                  f"{_sig_str(pc):>5}")
+
 # Create all visualizations
 # print("Creating box plots for AM and pureTones...")
 # create_boxplots_am_puretones()
 
 # print("Creating heatmap for natural sounds...")
 # create_heatmap_natural_sounds()
-print("Creating heatmap for stims...")
-create_heatmap_stims_pairwise()
 
-print("Creating delta heatmap for stims...")
-create_delta_heatmap_stims_pairwise()
-create_delta_heatmap_stims_pairwise_pca()
+# print("Creating heatmap for stims...")
+# create_heatmap_stims_pairwise()
+#
+# print("Creating delta heatmap for stims...")
+# create_delta_heatmap_stims_pairwise()
+# create_delta_heatmap_stims_pairwise_pca()
+#
+# print("Creating upper triangle boxplots with stats...")
+# create_upper_triangle_boxplots()
+# create_cca_svc_within_between_delta()
+# create_cca_svc_within_between_accuracy()
+#
+# print("Creating SVR boxplots...")
+# create_SVR_boxplots()
 
-print("Creating upper triangle boxplots with stats...")
-create_upper_triangle_boxplots()
-create_cca_svc_within_between_delta()
-create_cca_svc_within_between_accuracy()
-
-print("Creating SVR boxplots...")
-create_SVR_boxplots()
+print("Creating decoding comparison plots...")
+create_decoding_comparison()
 
 print("Plotting example decision boundaries...")
 # plot_example_decision_boundaries()
