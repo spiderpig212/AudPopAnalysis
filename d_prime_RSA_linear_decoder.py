@@ -20,8 +20,18 @@ import matplotlib
 matplotlib.use("Agg")  # Non-interactive backend, safe for multiprocessing
 
 import os
+
+# Limit BLAS/OpenMP threads per process so the 9 parallel workers do not
+# oversubscribe cores (process-level parallelism is what we want here).
+# These must be set before numpy/sklearn import their backends.
+os.environ.setdefault("OMP_NUM_THREADS", "1")
+os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")
+os.environ.setdefault("MKL_NUM_THREADS", "1")
+os.environ.setdefault("NUMEXPR_NUM_THREADS", "1")
+
 import json
 import pickle
+from concurrent.futures import ProcessPoolExecutor, as_completed
 
 import numpy as np
 from sklearn.svm import SVC, LinearSVC
@@ -203,186 +213,258 @@ def compute_rsa_matrix(get_features, uniq_stims, stim_row, session,
 # ----------------------------------------------------------------------------
 # Main analysis
 # ----------------------------------------------------------------------------
-def main(solve_hyperparam: bool = True):
+# ----------------------------------------------------------------------------
+# Per-(stimulus, response_range) worker
+# ----------------------------------------------------------------------------
+def process_stimulus_response(stimulus: str, response_range: str,
+                              solve_hyperparam: bool = True) -> str:
+    """
+    Compute and save the RSA data for a single (stimulus, response_range) cell.
+
+    Runs in its own process. Loads its own FiringRateAnalysis and significant_df
+    so workers are fully independent, and writes its own per-cell hyperparameter
+    cache (keys already include stimulus/response_range, so files are disjoint
+    and safe to merge later).
+
+    Returns the path of the saved pickle (for logging by the driver).
+    """
     fr_db = FiringRateAnalysis(db_suffix="coords_updated")
     file_path = fr_db.figdata_path
-    stim_types = fr_db.stim_types
 
     out_dir = f"{file_path}/dprime_RSA"
     os.makedirs(out_dir, exist_ok=True)
-    cache_path = f"{out_dir}/hyperparams.json"
+
+    # Per-worker cache file, disjoint across (stimulus, response_range).
+    cache_path = f"{out_dir}/hyperparams_{stimulus}_{response_range}.json"
     hp_cache = _load_hyperparam_cache(cache_path)
 
     significant_df = pd.read_csv(
         f"{file_path}/CCA_two_region_analysis/cca_primary_auditory_results.csv")
 
-    for stimulus in stim_types:
-        print(f"Computing d-prime RSA for {stimulus}")
-        stim_arrays = fr_db.return_arrays(stimulus)
-        brainRegionArray = stim_arrays["brainRegionArray"]  # per-neuron (rows)
-        sessionArray = stim_arrays["sessionIDArray"]        # per-neuron (rows)
-        uniqSessions = np.unique(sessionArray)
+    print(f"[{stimulus}/{response_range}] Computing d-prime RSA")
+    stim_arrays = fr_db.return_arrays(stimulus)
+    brainRegionArray = stim_arrays["brainRegionArray"]  # per-neuron (rows)
+    sessionArray = stim_arrays["sessionIDArray"]        # per-neuron (rows)
+    uniqSessions = np.unique(sessionArray)
 
-        # Rename posterior to dorsal instead of treating them as separate areas.
-        brainRegionArray[brainRegionArray == "Posterior auditory area"] = \
-            "Dorsal auditory area"
-        uniq_regions = np.unique(brainRegionArray)
-        # Dropping Temporal auditory area.
-        uniq_regions = uniq_regions[uniq_regions != "Temporal association areas"]
+    # Rename posterior to dorsal instead of treating them as separate areas.
+    brainRegionArray[brainRegionArray == "Posterior auditory area"] = \
+        "Dorsal auditory area"
+    uniq_regions = np.unique(brainRegionArray)
+    # Dropping Temporal auditory area.
+    uniq_regions = uniq_regions[uniq_regions != "Temporal association areas"]
 
-        stim_row = stim_arrays["stimArray"][0, :]  # per-trial stimulus id
-        uniqStims = np.unique(stim_row)
+    stim_row = stim_arrays["stimArray"][0, :]  # per-trial stimulus id
+    uniqStims = np.unique(stim_row)
 
-        for response_range in response_ranges:
-            rsa_data = []
-            # respArray: rows are neurons, columns are trials -> (nCells, nTrials)
-            respArray = stim_arrays[f"{response_range}fr"]
+    rsa_data = []
+    # respArray: rows are neurons, columns are trials -> (nCells, nTrials)
+    respArray = stim_arrays[f"{response_range}fr"]
 
-            for session in uniqSessions:
-                session_mask = sessionArray == session
-                session_resp_array = respArray[session_mask, :]  # (nCells, nTrials)
-                brain_session_array = brainRegionArray[session_mask]
+    for session in uniqSessions:
+        session_mask = sessionArray == session
+        session_resp_array = respArray[session_mask, :]  # (nCells, nTrials)
+        brain_session_array = brainRegionArray[session_mask]
 
-                for brain_region in uniq_regions:
-                    # primary_array: (nCells_in_region, nTrials)
-                    primary_array = session_resp_array[
-                        brain_session_array == brain_region, :]
+        for brain_region in uniq_regions:
+            # primary_array: (nCells_in_region, nTrials)
+            primary_array = session_resp_array[
+                brain_session_array == brain_region, :]
 
-                    if primary_array.shape[0] < neuron_threshold:
-                        print(f"[{stimulus}/{response_range}] Skipping session "
-                              f"{session}: insufficient neurons in {brain_region}")
+            if primary_array.shape[0] < neuron_threshold:
+                print(f"[{stimulus}/{response_range}] Skipping session "
+                      f"{session}: insufficient neurons in {brain_region}")
+                continue
+
+            # ----------------------------------------------------------
+            # (1) RAW firing rates for this single brain region.
+            # ----------------------------------------------------------
+            raw_matrix_lists = {m: [] for m in METRICS}
+            for _ in range(n_splits):
+                # Subsample neurons: (neuron_threshold, nTrials)
+                idx = np.random.choice(primary_array.shape[0],
+                                       neuron_threshold, replace=False)
+                primary_subset = primary_array[idx, :]
+
+                # Features must be (nTrials, nFeatures) -> transpose.
+                raw_features = primary_subset.T  # (nTrials, nNeurons)
+
+                def get_raw_features(mask, _f=raw_features):
+                    return _f[mask, :]  # (nTrials_for_stim, nNeurons)
+
+                mats = compute_rsa_matrix(
+                    get_raw_features, uniqStims, stim_row, session,
+                    brain_region, None, stimulus, response_range,
+                    hp_cache, solve_hyperparam)
+                for m in METRICS:
+                    raw_matrix_lists[m].append(mats[m])
+
+            rsa_data.append({
+                "stimulus": stimulus,
+                "response_range": response_range,
+                "session": session,
+                "data_source": "raw",
+                "brain_region": brain_region,
+                "target_region": None,
+                "pair_comparison": brain_region,
+                "J_matrix": np.mean(raw_matrix_lists["J"], axis=0),
+                "dprime_matrix": np.mean(raw_matrix_lists["dprime"], axis=0),
+            })
+
+            # ----------------------------------------------------------
+            # (2) CCA-projected firing rates: primary-side canonical
+            #     variates from this (primary) region into each target.
+            # ----------------------------------------------------------
+            for target_region in uniq_regions:
+                if brain_region == target_region:
+                    continue
+                # target_array: (nCells_in_target, nTrials)
+                target_array = session_resp_array[
+                    brain_session_array == target_region, :]
+                if target_array.shape[0] < neuron_threshold:
+                    print(f"[{stimulus}/{response_range}] Skipping session "
+                          f"{session}: insufficient neurons in "
+                          f"{target_region}")
+                    continue
+
+                mask_n_comps_target = (
+                    (significant_df["region1"] == brain_region)
+                    & (significant_df["region2"] == target_region)
+                    & (significant_df["stimulus"] == stimulus)
+                    & (significant_df["response_range"] == response_range)
+                    & (significant_df["session"] == session)
+                )
+                try:
+                    n_components_target = significant_df.loc[
+                        mask_n_comps_target, "significant_components"].iloc[0]
+                    n_components_target = np.int64(n_components_target)
+                    if n_components_target <= 1:
+                        print(f"[{stimulus}/{response_range}] Skipping "
+                              f"session {session}: insufficient significant "
+                              f"components for {brain_region} vs "
+                              f"{target_region}")
                         continue
+                except (IndexError, ValueError):
+                    print(f"[{stimulus}/{response_range}] No significant "
+                          f"components found for {brain_region} vs "
+                          f"{target_region}, session {session}")
+                    continue
 
-                    # ----------------------------------------------------------
-                    # (1) RAW firing rates for this single brain region.
-                    # ----------------------------------------------------------
-                    raw_matrix_lists = {m: [] for m in METRICS}
-                    for _ in range(n_splits):
-                        # Subsample neurons: (neuron_threshold, nTrials)
-                        idx = np.random.choice(primary_array.shape[0],
-                                               neuron_threshold, replace=False)
-                        primary_subset = primary_array[idx, :]
+                cca_matrix_lists = {m: [] for m in METRICS}
+                for _ in range(n_splits):
+                    # Subsample and zero-mean both regions (as in CCA_RSA).
+                    p_idx = np.random.choice(primary_array.shape[0],
+                                             neuron_threshold, replace=False)
+                    primary_subset = primary_array[p_idx, :]  # (nCells, nTrials)
+                    primary_zero_mean = primary_subset - np.mean(primary_subset)
 
-                        # Features must be (nTrials, nFeatures) -> transpose.
-                        raw_features = primary_subset.T  # (nTrials, nNeurons)
+                    t_idx = np.random.choice(target_array.shape[0],
+                                             neuron_threshold, replace=False)
+                    target_subset = target_array[t_idx, :]  # (nCells, nTrials)
+                    target_zero_mean = target_subset - np.mean(target_subset)
 
-                        def get_raw_features(mask, _f=raw_features):
-                            return _f[mask, :]  # (nTrials_for_stim, nNeurons)
+                    # CCA expects (nSamples, nFeatures) = (nTrials, nCells),
+                    # so transpose. primary_transform is
+                    # (nTrials, n_components): the primary-side variates.
+                    cca_mod = CCA(n_components=n_components_target)
+                    primary_transform, _ = cca_mod.fit_transform(
+                        primary_zero_mean.T, target_zero_mean.T)
 
-                        mats = compute_rsa_matrix(
-                            get_raw_features, uniqStims, stim_row, session,
-                            brain_region, None, stimulus, response_range,
-                            hp_cache, solve_hyperparam)
-                        for m in METRICS:
-                            raw_matrix_lists[m].append(mats[m])
+                    def get_cca_features(mask, _f=primary_transform):
+                        return _f[mask, :]  # (nTrials_for_stim, n_components)
 
-                    rsa_data.append({
-                        "stimulus": stimulus,
-                        "response_range": response_range,
-                        "session": session,
-                        "data_source": "raw",
-                        "brain_region": brain_region,
-                        "target_region": None,
-                        "pair_comparison": brain_region,
-                        "J_matrix": np.mean(raw_matrix_lists["J"], axis=0),
-                        "dprime_matrix": np.mean(raw_matrix_lists["dprime"], axis=0),
-                    })
+                    mats = compute_rsa_matrix(
+                        get_cca_features, uniqStims, stim_row, session,
+                        brain_region, target_region, stimulus,
+                        response_range, hp_cache, solve_hyperparam)
+                    for m in METRICS:
+                        cca_matrix_lists[m].append(mats[m])
 
-                    # ----------------------------------------------------------
-                    # (2) CCA-projected firing rates: primary-side canonical
-                    #     variates from this (primary) region into each target.
-                    # ----------------------------------------------------------
-                    for target_region in uniq_regions:
-                        if brain_region == target_region:
-                            continue
-                        # target_array: (nCells_in_target, nTrials)
-                        target_array = session_resp_array[
-                            brain_session_array == target_region, :]
-                        if target_array.shape[0] < neuron_threshold:
-                            print(f"[{stimulus}/{response_range}] Skipping session "
-                                  f"{session}: insufficient neurons in "
-                                  f"{target_region}")
-                            continue
+                rsa_data.append({
+                    "stimulus": stimulus,
+                    "response_range": response_range,
+                    "session": session,
+                    "data_source": "cca",
+                    "brain_region": brain_region,
+                    "target_region": target_region,
+                    "pair_comparison": f"{brain_region}_{target_region}",
+                    "J_matrix": np.mean(cca_matrix_lists["J"], axis=0),
+                    "dprime_matrix": np.mean(cca_matrix_lists["dprime"], axis=0),
+                })
 
-                        mask_n_comps_target = (
-                            (significant_df["region1"] == brain_region)
-                            & (significant_df["region2"] == target_region)
-                            & (significant_df["stimulus"] == stimulus)
-                            & (significant_df["response_range"] == response_range)
-                            & (significant_df["session"] == session)
-                        )
-                        try:
-                            n_components_target = significant_df.loc[
-                                mask_n_comps_target, "significant_components"].iloc[0]
-                            n_components_target = np.int64(n_components_target)
-                            if n_components_target <= 1:
-                                print(f"[{stimulus}/{response_range}] Skipping "
-                                      f"session {session}: insufficient significant "
-                                      f"components for {brain_region} vs "
-                                      f"{target_region}")
-                                continue
-                        except (IndexError, ValueError):
-                            print(f"[{stimulus}/{response_range}] No significant "
-                                  f"components found for {brain_region} vs "
-                                  f"{target_region}, session {session}")
-                            continue
+    # Persist this worker's hyperparameter cache.
+    _save_hyperparam_cache(cache_path, hp_cache)
 
-                        cca_matrix_lists = {m: [] for m in METRICS}
-                        for _ in range(n_splits):
-                            # Subsample and zero-mean both regions (as in CCA_RSA).
-                            p_idx = np.random.choice(primary_array.shape[0],
-                                                     neuron_threshold, replace=False)
-                            primary_subset = primary_array[p_idx, :]  # (nCells, nTrials)
-                            primary_zero_mean = primary_subset - np.mean(primary_subset)
+    out_pkl = f"{out_dir}/dprime_rsa_{stimulus}_{response_range}.pkl"
+    pickle.dump(rsa_data, open(out_pkl, "wb"))
+    print(f"[{stimulus}/{response_range}] d-prime RSA data saved to {out_pkl}")
 
-                            t_idx = np.random.choice(target_array.shape[0],
-                                                     neuron_threshold, replace=False)
-                            target_subset = target_array[t_idx, :]  # (nCells, nTrials)
-                            target_zero_mean = target_subset - np.mean(target_subset)
+    rsa_frame = pd.DataFrame(rsa_data)
+    rsa_frame.to_csv(
+        f"{out_dir}/dprime_rsa_{stimulus}_{response_range}.csv")
 
-                            # CCA expects (nSamples, nFeatures) = (nTrials, nCells),
-                            # so transpose. primary_transform is
-                            # (nTrials, n_components): the primary-side variates.
-                            cca_mod = CCA(n_components=n_components_target)
-                            primary_transform, _ = cca_mod.fit_transform(
-                                primary_zero_mean.T, target_zero_mean.T)
+    return out_pkl
 
-                            def get_cca_features(mask, _f=primary_transform):
-                                return _f[mask, :]  # (nTrials_for_stim, n_components)
 
-                            mats = compute_rsa_matrix(
-                                get_cca_features, uniqStims, stim_row, session,
-                                brain_region, target_region, stimulus,
-                                response_range, hp_cache, solve_hyperparam)
-                            for m in METRICS:
-                                cca_matrix_lists[m].append(mats[m])
+def _merge_hyperparam_caches(out_dir: str, stim_types, resp_ranges) -> None:
+    """
+    Merge the disjoint per-worker cache files into a single hyperparams.json for
+    convenient reuse on reruns. Per-worker files are kept as-is.
+    """
+    merged = {}
+    for stimulus in stim_types:
+        for response_range in resp_ranges:
+            per_worker = f"{out_dir}/hyperparams_{stimulus}_{response_range}.json"
+            merged.update(_load_hyperparam_cache(per_worker))
+    _save_hyperparam_cache(f"{out_dir}/hyperparams.json", merged)
 
-                        rsa_data.append({
-                            "stimulus": stimulus,
-                            "response_range": response_range,
-                            "session": session,
-                            "data_source": "cca",
-                            "brain_region": brain_region,
-                            "target_region": target_region,
-                            "pair_comparison": f"{brain_region}_{target_region}",
-                            "J_matrix": np.mean(cca_matrix_lists["J"], axis=0),
-                            "dprime_matrix": np.mean(cca_matrix_lists["dprime"], axis=0),
-                        })
 
-            # Persist hyperparameter cache after each response_range so partial
-            # runs still save solved C values.
-            _save_hyperparam_cache(cache_path, hp_cache)
+# ----------------------------------------------------------------------------
+# Parallel driver
+# ----------------------------------------------------------------------------
+def main(solve_hyperparam: bool = True, max_workers: int = None):
+    """
+    Run all (stimulus, response_range) combinations in parallel, one process per
+    combination.
+    """
+    fr_db = FiringRateAnalysis(db_suffix="coords_updated")
+    file_path = fr_db.figdata_path
+    stim_types = fr_db.stim_types
+    out_dir = f"{file_path}/dprime_RSA"
+    os.makedirs(out_dir, exist_ok=True)
+    stored_Errors = []
 
-            out_pkl = f"{out_dir}/dprime_rsa_{stimulus}_{response_range}.pkl"
-            pickle.dump(rsa_data, open(out_pkl, "wb"))
-            print(f"d-prime RSA data saved to {out_pkl}")
+    # One task per (stimulus, response_range) -> up to 9 parallel workers.
+    tasks = [(stimulus, response_range)
+             for stimulus in stim_types
+             for response_range in response_ranges]
 
-            rsa_frame = pd.DataFrame(rsa_data)
-            rsa_frame.to_csv(
-                f"{out_dir}/dprime_rsa_{stimulus}_{response_range}.csv")
+    if max_workers is None:
+        max_workers = len(tasks)
+
+    with ProcessPoolExecutor(max_workers=max_workers) as executor:
+        future_to_task = {
+            executor.submit(process_stimulus_response, stimulus,
+                            response_range, solve_hyperparam): (stimulus,
+                                                                response_range)
+            for stimulus, response_range in tasks
+        }
+        for future in as_completed(future_to_task):
+            stimulus, response_range = future_to_task[future]
+            try:
+                out_pkl = future.result()
+                print(f"Completed {stimulus}/{response_range} -> {out_pkl}")
+            except Exception as exc:
+                print(f"[{stimulus}/{response_range}] FAILED: {exc!r}")
+                stored_Errors.append(f"[{stimulus}/{response_range}] FAILED: {exc!r}")
+
+    # Merge per-worker caches into a single hyperparams.json for reruns.
+    _merge_hyperparam_caches(out_dir, stim_types, response_ranges)
+    for err in stored_Errors:
+        print(err)
 
 
 if __name__ == "__main__":
     # Set solve_hyperparam=False on reruns to reuse the cached C values from
-    # dprime_RSA/hyperparams.json and skip GridSearchCV.
+    # dprime_RSA/hyperparams_*.json and skip GridSearchCV.
     main(solve_hyperparam=True)
