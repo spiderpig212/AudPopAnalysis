@@ -134,7 +134,7 @@ def make_figure(records, stimulus, data_source, uniq_stims, out_dir,
     fig.subplots_adjust(left=0.08, top=0.92, hspace=0.3, wspace=0.3)
 
     metric_tag = "J" if metric_key == "J_matrix" else "dprime"
-    out_path = f"{out_dir}/dprime_rsa_{stimulus}_{data_source}_{metric_tag}.png"
+    out_path = f"{out_dir}/figures/dprime_rsa_{stimulus}_{data_source}_{metric_tag}.png"
     fig.savefig(out_path, dpi=150)
     plt.close(fig)
     print(f"Saved figure to {out_path}")
@@ -163,3 +163,4 @@ def main(metric_key: str = "J_matrix"):
 if __name__ == "__main__":
     # Pass metric_key="dprime_matrix" to plot classic d-prime instead of J.
     main(metric_key="J_matrix")
+    # main(metric_key="dprime_matrix")
