@@ -136,7 +136,7 @@ def make_figure(records, stimulus, data_source, uniq_stims, out_dir,
     fig.subplots_adjust(left=0.08, top=0.92, hspace=0.3, wspace=0.3)
 
     metric_tag = "J" if metric_key == "J_matrix" else "dprime"
-    out_path = f"{out_dir}/figures/dprime_rsa_{stimulus}_{data_source}_{metric_tag}.png"
+    out_path = f"{out_dir}/dprime_rsa_{stimulus}_{data_source}_{metric_tag}.png"
     fig.savefig(out_path, dpi=150)
     plt.close(fig)
     print(f"Saved figure to {out_path}")
@@ -384,7 +384,7 @@ def make_distribution_figure(records, stimulus, groups, group_labels,
 
     metric_tag = "J" if metric_key == "J_matrix" else "dprime"
     os.makedirs(f"{out_dir}/figures", exist_ok=True)
-    base = (f"{out_dir}/figures/dprime_dist_{stimulus}_{fig_tag}_"
+    base = (f"{out_dir}/dprime_dist_{stimulus}_{fig_tag}_"
             f"{triangle}_{point_level}_{metric_tag}")
     fig.savefig(f"{base}.png", dpi=150)
     plt.close(fig)
@@ -432,6 +432,298 @@ def make_raw_vs_cca_figure(records, stimulus, out_dir, metric_key,
         records, stimulus, groups, labels, "mixed", out_dir, metric_key,
         triangle, point_level, "raw_vs_cca")
 
+# ----------------------------------------------------------------------------
+# Within- vs between-sound-source comparison (natural sounds only)
+# ----------------------------------------------------------------------------
+# Natural sounds are 5 sources x 4 exemplars = 20 stimuli, ordered so that
+# consecutive blocks of 4 belong to the same source (source = index // 4).
+WITHIN_BETWEEN_COLORS = {"within": "#2C7FB8", "between": "#D95F0E"}
+
+
+def source_labels_for_matrix(n, exemplars_per_source=4):
+    """Return a length-n array of source labels via index // exemplars_per_source."""
+    return np.arange(n) // exemplars_per_source
+
+
+def split_within_between(mat, exemplars_per_source=4):
+    """
+    Split the upper-triangle entries of an RSA matrix into within-source and
+    between-source values.
+
+    An upper-triangle entry (i, j) is "within" if source(i) == source(j),
+    otherwise "between". The main diagonal is excluded.
+
+    Returns (within_vals, between_vals) as 1D arrays.
+    """
+    if mat is None:
+        return np.array([]), np.array([])
+    n = mat.shape[0]
+    src = source_labels_for_matrix(n, exemplars_per_source)
+    i, j = np.triu_indices(n, k=1)
+    vals = mat[i, j]
+    same_source = src[i] == src[j]
+    return vals[same_source], vals[~same_source]
+
+
+def collect_within_between(records, data_source, row_value, row_field,
+                           response_range, metric_key, point_level,
+                           exemplars_per_source=4):
+    """
+    Collect within-source and between-source values for one group/response range.
+
+    point_level="session_mean": split the upper triangle of the session-averaged
+                                matrix (like the heatmaps).
+    point_level="entry":        pool the within / between entries across all
+                                sessions (non-independent; exploratory).
+    Returns (within_vals, between_vals) as 1D arrays.
+    """
+    if point_level == "session_mean":
+        mean_mat = average_over_sessions(
+            records, data_source, row_value, response_range,
+            row_field, metric_key)
+        return split_within_between(mean_mat, exemplars_per_source)
+
+    if point_level != "entry":
+        raise ValueError(f"Unknown point_level: {point_level}")
+
+    within_all, between_all = [], []
+    for r in records:
+        if (r["data_source"] == data_source
+                and r["response_range"] == response_range
+                and r[row_field] == row_value
+                and r[metric_key] is not None):
+            w, b = split_within_between(r[metric_key], exemplars_per_source)
+            if w.size:
+                within_all.append(w)
+            if b.size:
+                between_all.append(b)
+
+    within = np.concatenate(within_all) if within_all else np.array([])
+    between = np.concatenate(between_all) if between_all else np.array([])
+    return within, between
+
+
+def _annotate_within_between_stats(ax, within_between_pairs, xcenters,
+                                   within_offset, between_offset, box_width,
+                                   response_range, groups, stats_rows):
+    """
+    Stats for the within/between figure:
+      1) Mann-Whitney U (within vs between) at EACH x-tick (brain region / pair).
+      2) Pairwise Mann-Whitney U across regions with Bonferroni correction, run
+         separately for "within" across all regions and "between" across all
+         regions. Significant (Bonferroni-corrected) comparisons are annotated.
+    """
+    all_vals = []
+    for w, b in within_between_pairs:
+        if w.size:
+            all_vals.append(w)
+        if b.size:
+            all_vals.append(b)
+    y_max = np.nanmax([np.nanmax(v) for v in all_vals] or [0.0])
+    y_min = np.nanmin([np.nanmin(v) for v in all_vals] or [0.0])
+    span = (y_max - y_min) if (y_max > y_min) else 1.0
+    step = span * 0.08
+
+    # (1) Per-tick within vs between (Mann-Whitney U).
+    for idx, (w, b) in enumerate(within_between_pairs):
+        if w.size < 2 or b.size < 2:
+            continue
+        try:
+            u_stat, p_val = stats.mannwhitneyu(w, b, alternative="two-sided")
+        except ValueError:
+            continue
+        stats_rows.append({
+            "response_range": response_range,
+            "test": "within_vs_between",
+            "group": groups[idx][3],  # human-readable label (see build below)
+            "n_within": w.size,
+            "n_between": b.size,
+            "statistic": u_stat,
+            "p_value": p_val,
+            "p_value_bonferroni": p_val,  # single test, no correction
+        })
+        if p_val < 0.05:
+            x1 = xcenters[idx] + within_offset
+            x2 = xcenters[idx] + between_offset
+            y = y_max + step
+            ax.plot([x1, x1, x2, x2],
+                    [y, y + step * 0.3, y + step * 0.3, y],
+                    lw=1.0, color="black")
+            ax.text((x1 + x2) / 2, y + step * 0.3, _p_to_stars(p_val),
+                    ha="center", va="bottom", fontsize=9)
+
+    # (2) Pairwise Mann-Whitney U across regions, Bonferroni-corrected, run
+    #     separately for the "within" family and the "between" family. Brackets
+    #     for these region-vs-region comparisons are stacked above the per-tick
+    #     annotations.
+    level = 2  # start above the per-tick brackets
+    for kind, sel, offset, color in (
+            ("within", 0, within_offset, WITHIN_BETWEEN_COLORS["within"]),
+            ("between", 1, between_offset, WITHIN_BETWEEN_COLORS["between"])):
+        # Region indices that have enough data for this family.
+        valid_idx = [i for i, pair in enumerate(within_between_pairs)
+                     if pair[sel].size >= 2]
+        comparisons = list(itertools.combinations(valid_idx, 2))
+        n_comparisons = len(comparisons)
+        if n_comparisons == 0:
+            continue
+
+        for (a, b) in comparisons:
+            va = within_between_pairs[a][sel]
+            vb = within_between_pairs[b][sel]
+            try:
+                u_stat, p_val = stats.mannwhitneyu(va, vb,
+                                                   alternative="two-sided")
+            except ValueError:
+                continue
+            # Bonferroni correction within this family.
+            p_corrected = min(p_val * n_comparisons, 1.0)
+            stats_rows.append({
+                "response_range": response_range,
+                "test": f"{kind}_across_regions",
+                "group": f"{groups[a][3]} vs {groups[b][3]}",
+                "n_within": va.size if kind == "within" else None,
+                "n_between": vb.size if kind == "between" else None,
+                "statistic": u_stat,
+                "p_value": p_val,
+                "p_value_bonferroni": p_corrected,
+            })
+            if p_corrected < 0.05:
+                x1 = xcenters[a] + offset
+                x2 = xcenters[b] + offset
+                y = y_max + step * (level + 1)
+                ax.plot([x1, x1, x2, x2],
+                        [y, y + step * 0.3, y + step * 0.3, y],
+                        lw=1.0, color=color)
+                ax.text((x1 + x2) / 2, y + step * 0.3,
+                        _p_to_stars(p_corrected),
+                        ha="center", va="bottom", fontsize=9, color=color)
+                level += 1
+
+
+def make_within_between_figure(records, groups, out_dir, metric_key,
+                               response_range, point_level, fig_tag,
+                               exemplars_per_source=4):
+    """
+    One figure (one response range). X = brain region / region pair (per group),
+    two boxes per tick (within vs between, color-coded). Y = metric.
+
+    groups: list of (data_source, row_value, row_field, label) tuples.
+    """
+    metric_name = "Fisher's J" if metric_key == "J_matrix" else "d-prime"
+    stimulus = "naturalSounds"
+
+    n_groups = len(groups)
+    xcenters = np.arange(n_groups) * 1.5  # spacing between region ticks
+    box_width = 0.5
+    within_offset = -box_width * 0.55
+    between_offset = box_width * 0.55
+
+    fig, ax = plt.subplots(figsize=(3 + 2.0 * n_groups, 6))
+
+    within_between_pairs = []
+    for (data_source, row_value, row_field, label) in groups:
+        w, b = collect_within_between(
+            records, data_source, row_value, row_field, response_range,
+            metric_key, point_level, exemplars_per_source)
+        within_between_pairs.append((w, b))
+
+    # Draw within and between boxes at each tick.
+    for idx, (w, b) in enumerate(within_between_pairs):
+        for vals, offset, kind in ((w, within_offset, "within"),
+                                    (b, between_offset, "between")):
+            data = vals if vals.size > 0 else np.array([np.nan])
+            bp = ax.boxplot([data], positions=[xcenters[idx] + offset],
+                            widths=box_width, showfliers=False,
+                            patch_artist=True)
+            for patch in bp["boxes"]:
+                patch.set_facecolor(WITHIN_BETWEEN_COLORS[kind])
+                patch.set_alpha(0.7)
+            for median in bp["medians"]:
+                median.set_color("black")
+            # Conditional strip overlay (gray, low alpha).
+            if 0 < vals.size <= STRIP_ALPHA_THRESHOLD:
+                jitter = (np.random.rand(vals.size) - 0.5) * (box_width * 0.6)
+                ax.scatter(np.full(vals.size, xcenters[idx] + offset) + jitter,
+                           vals, s=8, alpha=0.4, color="black", zorder=3)
+
+    _annotate_within_between_stats(
+        ax, within_between_pairs, xcenters, within_offset, between_offset,
+        box_width, response_range, groups, _WB_STATS_ROWS)
+
+    ax.set_xticks(xcenters)
+    ax.set_xticklabels([g[3] for g in groups], rotation=15, ha="right")
+    ax.set_ylabel(metric_name)
+    ax.set_xlabel("Brain region / region pair")
+
+    handles = [plt.Line2D([0], [0], marker="s", linestyle="", markersize=10,
+                          color=WITHIN_BETWEEN_COLORS[k], label=k)
+               for k in ("within", "between")]
+    ax.legend(handles=handles, title="Source pairing", loc="upper right",
+              fontsize=8)
+
+    caption = ("per-entry (non-independent; exploratory stats)"
+               if point_level == "entry" else "session-averaged")
+    ax.set_title(f"{stimulus} — {fig_tag} — {response_range} — {metric_name}\n"
+                 f"{caption}", fontsize=11)
+
+    fig.tight_layout()
+
+    metric_tag = "J" if metric_key == "J_matrix" else "dprime"
+    os.makedirs(f"{out_dir}", exist_ok=True)
+    base = (f"{out_dir}/dprime_within_between_{fig_tag}_"
+            f"{response_range}_{point_level}_{metric_tag}")
+    fig.savefig(f"{base}.png", dpi=150)
+    plt.close(fig)
+    print(f"Saved figure to {base}.png")
+
+
+# Module-level accumulator so all within/between stats (per-tick + omnibus) can
+# be written to a single CSV per (fig_tag, point_level, metric). Reset per call
+# batch in make_all_within_between_figures.
+_WB_STATS_ROWS = []
+
+
+def make_all_within_between_figures(records, out_dir, metric_key, point_level,
+                                    exemplars_per_source=4):
+    """
+    Build the within/between figures for natural sounds: raw regions, cca region
+    pairs, and the raw-Primary-vs-two-CCA-pairs comparison. One figure per
+    response range for each of the three flavors.
+    """
+    raw_groups = [("raw", r, "brain_region", r) for r in raw_rows]
+    cca_groups = [
+        ("cca", r, "target_region",
+         f"Primary -> {r.replace(' auditory area', '')}")
+        for r in cca_target_rows
+    ]
+    raw_vs_cca_groups = [
+        ("raw", "Primary auditory area", "brain_region", "Raw Primary"),
+        ("cca", "Ventral auditory area", "target_region", "Primary -> Ventral"),
+        ("cca", "Dorsal auditory area", "target_region", "Primary -> Dorsal"),
+    ]
+
+    flavors = [
+        ("raw", raw_groups),
+        ("cca", cca_groups),
+        ("raw_vs_cca", raw_vs_cca_groups),
+    ]
+
+    metric_tag = "J" if metric_key == "J_matrix" else "dprime"
+    for fig_tag, groups in flavors:
+        global _WB_STATS_ROWS
+        _WB_STATS_ROWS = []  # fresh accumulator per flavor
+        for response_range in response_ranges:
+            make_within_between_figure(
+                records, groups, out_dir, metric_key, response_range,
+                point_level, fig_tag, exemplars_per_source)
+        if _WB_STATS_ROWS:
+            os.makedirs(f"{out_dir}", exist_ok=True)
+            stats_path = (f"{out_dir}/dprime_within_between_{fig_tag}_"
+                          f"{point_level}_{metric_tag}_stats.csv")
+            pd.DataFrame(_WB_STATS_ROWS).to_csv(stats_path, index=False)
+            print(f"Saved within/between stats to {stats_path}")
+
 def main(metric_key: str = "J_matrix"):
     fr_db = FiringRateAnalysis(db_suffix="coords_updated")
     file_path = fr_db.figdata_path
@@ -457,15 +749,21 @@ def main(metric_key: str = "J_matrix"):
             for point_level in ("entry", "session_mean"):
                 # Viz 1 / Viz 2: within-source (raw, then cca).
                 make_within_source_figures(
-                    records, stimulus, "raw", out_dir, metric_key,
+                    records, stimulus, "raw", out_dir+f"/figures/{triangle}", metric_key,
                     triangle, point_level)
                 make_within_source_figures(
-                    records, stimulus, "cca", out_dir, metric_key,
+                    records, stimulus, "cca", out_dir+f"/figures/{triangle}", metric_key,
                     triangle, point_level)
                 # Viz 3: raw Primary vs the two CCA region-pairs.
                 make_raw_vs_cca_figure(
-                    records, stimulus, out_dir, metric_key,
+                    records, stimulus, out_dir+f"/figures/{triangle}", metric_key,
                     triangle, point_level)
+        # Within- vs between-sound-source figures (natural sounds only), for
+        # both per-entry and session-averaged point levels.
+        if stimulus == "naturalSound":
+            for point_level in ("entry", "session_mean"):
+                make_all_within_between_figures(
+                    records, out_dir+"/figures/wb", metric_key, point_level)
 
 
 if __name__ == "__main__":
