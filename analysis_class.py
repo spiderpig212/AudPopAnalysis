@@ -79,7 +79,7 @@ class AnalysisBase:
                 'stim_type': 'pureTones',
                 'stim_var': 'currentFreq',
                 'time_range': [-0.1, 0.3],
-                'all_periods': [[-0.1, 0], [0, 0.05], [0.05, 0.1], [0.1, 0.15]],
+                'all_periods': [[-0.1, 0], [0, 0.1], [0, 0.1], [0.1, 0.15]],  # Previously onset was [0, 0.05] and sustained was [0.05, 0.1]
                 'nTrials': 320,
                 'nCategories': 16,
                 },
