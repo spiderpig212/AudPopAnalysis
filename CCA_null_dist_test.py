@@ -281,7 +281,7 @@ if __name__ == "__main__":
 
     # Calculate cosine similarities with null distribution
     print("Starting cross-region projection similarity analysis...")
-    null_results = calculate_cca_cosine_similarity_with_null(analyzer, session_sig_df, n_null_samples=100)
+    null_results = calculate_cca_cosine_similarity_with_null(analyzer, session_sig_df, n_null_samples=10000)
 
     # Display results
     print(f"\nProcessed {len(null_results)} region pair comparisons")

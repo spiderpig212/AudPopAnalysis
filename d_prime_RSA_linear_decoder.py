@@ -35,7 +35,7 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 
 import numpy as np
 from sklearn.svm import SVC, LinearSVC
-from sklearn.model_selection import GridSearchCV
+from sklearn.model_selection import GridSearchCV, cross_val_score
 from sklearn.cross_decomposition import CCA
 import pandas as pd
 
@@ -52,6 +52,12 @@ CV_FOLDS = 5
 # Metric to store in the RSA matrices. We compute both regardless; this only
 # controls the default "primary" metric key, but both are saved.
 METRICS = ("J", "dprime")
+
+# "accuracy" is the binary decoder's cross-validated classification accuracy
+# for the pair, computed directly from the SVC rather than from the 1D
+# projections. Kept separate from METRICS since it isn't produced by
+# dprime_from_projections.
+ALL_MATRIX_KEYS = METRICS + ("accuracy",)
 
 
 # ----------------------------------------------------------------------------
@@ -131,9 +137,11 @@ def train_pairwise_decoder(features_a: np.ndarray, features_b: np.ndarray,
 
     cached_C: if not None, skip GridSearchCV and fit directly with this C.
 
-    Returns: (proj_a, proj_b, best_C)
+    Returns: (proj_a, proj_b, best_C, accuracy)
         proj_a, proj_b: 1D projections of each class onto w.
         best_C: the C used (either the searched-optimal or the cached value).
+        accuracy: cross-validated classification accuracy of the decoder at
+            best_C (mean over CV_FOLDS folds).
     """
     # X shape (nTrials_total, nFeatures); y is the class label per trial.
     X = np.vstack([features_a, features_b])
@@ -143,7 +151,9 @@ def train_pairwise_decoder(features_a: np.ndarray, features_b: np.ndarray,
     ])
 
     if cached_C is None:
-        # Cross-validate ONLY to select the optimal SVC hyperparameter.
+        # Cross-validate to select the optimal SVC hyperparameter; best_score_
+        # is the mean held-out accuracy at that C, so it doubles as our
+        # decoding-accuracy metric at no extra cost.
         search = GridSearchCV(
             SVC(kernel="linear"),
             param_grid={"C": C_GRID},
@@ -151,8 +161,13 @@ def train_pairwise_decoder(features_a: np.ndarray, features_b: np.ndarray,
         )
         search.fit(X, y)
         best_C = float(search.best_params_["C"])
+        accuracy = float(search.best_score_)
     else:
         best_C = float(cached_C)
+        # No grid search here, so cross-validate directly at the cached C to
+        # get a held-out accuracy estimate.
+        accuracy = float(np.mean(
+            cross_val_score(SVC(kernel="linear", C=best_C), X, y, cv=CV_FOLDS)))
 
     # Refit the optimal model on ALL pair trials; d-prime is computed only from
     # this optimal model (not from CV folds).
@@ -168,7 +183,7 @@ def train_pairwise_decoder(features_a: np.ndarray, features_b: np.ndarray,
     # Project each class (trials as rows) onto w -> 1D arrays of length nTrials.
     proj_a = features_a @ w
     proj_b = features_b @ w
-    return proj_a, proj_b, best_C
+    return proj_a, proj_b, best_C, accuracy
 
 
 def compute_rsa_matrix(get_features, uniq_stims, stim_row, session,
@@ -183,7 +198,7 @@ def compute_rsa_matrix(get_features, uniq_stims, stim_row, session,
     stim_row: per-trial stimulus id array, shape (nTrials,).
     """
     n = len(uniq_stims)
-    matrices = {m: np.zeros((n, n)) for m in METRICS}
+    matrices = {m: np.zeros((n, n)) for m in ALL_MATRIX_KEYS}
 
     for i, stim_a in enumerate(uniq_stims):
         for j in range(i + 1, n):
@@ -196,11 +211,14 @@ def compute_rsa_matrix(get_features, uniq_stims, stim_row, session,
                                   stimulus, response_range, stim_a, stim_b)
             cached_C = None if solve_hyperparam else hp_cache.get(key)
 
-            proj_a, proj_b, best_C = train_pairwise_decoder(
+            proj_a, proj_b, best_C, accuracy = train_pairwise_decoder(
                 feats_a, feats_b, cached_C=cached_C)
 
             # Update cache with the C actually used (solved or reused).
             hp_cache[key] = best_C
+
+            matrices["accuracy"][i, j] = accuracy
+            matrices["accuracy"][j, i] = accuracy  # Symmetric matrix.
 
             for metric in METRICS:
                 val = dprime_from_projections(proj_a, proj_b, metric=metric)
@@ -279,7 +297,7 @@ def process_stimulus_response(stimulus: str, response_range: str,
             # ----------------------------------------------------------
             # (1) RAW firing rates for this single brain region.
             # ----------------------------------------------------------
-            raw_matrix_lists = {m: [] for m in METRICS}
+            raw_matrix_lists = {m: [] for m in ALL_MATRIX_KEYS}
             for _ in range(n_splits):
                 # Subsample neurons: (neuron_threshold, nTrials)
                 idx = np.random.choice(primary_array.shape[0],
@@ -296,7 +314,7 @@ def process_stimulus_response(stimulus: str, response_range: str,
                     get_raw_features, uniqStims, stim_row, session,
                     brain_region, None, stimulus, response_range,
                     hp_cache, solve_hyperparam)
-                for m in METRICS:
+                for m in ALL_MATRIX_KEYS:
                     raw_matrix_lists[m].append(mats[m])
 
             rsa_data.append({
@@ -309,6 +327,7 @@ def process_stimulus_response(stimulus: str, response_range: str,
                 "pair_comparison": brain_region,
                 "J_matrix": np.mean(raw_matrix_lists["J"], axis=0),
                 "dprime_matrix": np.mean(raw_matrix_lists["dprime"], axis=0),
+                "accuracy_matrix": np.mean(raw_matrix_lists["accuracy"], axis=0),
             })
 
             # ----------------------------------------------------------
@@ -350,7 +369,7 @@ def process_stimulus_response(stimulus: str, response_range: str,
                           f"{target_region}, session {session}")
                     continue
 
-                cca_matrix_lists = {m: [] for m in METRICS}
+                cca_matrix_lists = {m: [] for m in ALL_MATRIX_KEYS}
                 for _ in range(n_splits):
                     # Subsample and zero-mean both regions (as in CCA_RSA).
                     p_idx = np.random.choice(primary_array.shape[0],
@@ -377,7 +396,7 @@ def process_stimulus_response(stimulus: str, response_range: str,
                         get_cca_features, uniqStims, stim_row, session,
                         brain_region, target_region, stimulus,
                         response_range, hp_cache, solve_hyperparam)
-                    for m in METRICS:
+                    for m in ALL_MATRIX_KEYS:
                         cca_matrix_lists[m].append(mats[m])
 
                 rsa_data.append({
@@ -390,6 +409,7 @@ def process_stimulus_response(stimulus: str, response_range: str,
                     "pair_comparison": f"{brain_region}_{target_region}",
                     "J_matrix": np.mean(cca_matrix_lists["J"], axis=0),
                     "dprime_matrix": np.mean(cca_matrix_lists["dprime"], axis=0),
+                    "accuracy_matrix": np.mean(cca_matrix_lists["accuracy"], axis=0),
                 })
 
     # Persist this worker's hyperparameter cache.
