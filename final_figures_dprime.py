@@ -53,10 +53,15 @@ from d_prime_RSA_visualization import (
     _p_to_stars,
 )
 
-MAIN_RESPONSE_RANGE = "sustained"
-
-# Output file formats; any extension matplotlib supports ("png", "svg", "pdf").
-DEFAULT_FORMATS = ("png",)
+# Sizes, fonts, colors and output formats are shared across all final figures
+# and live in figure_params.py (edit PAPER_STYLE / POSTER_STYLE there).
+from figure_params import (
+    MAIN_RESPONSE_RANGE,
+    DEFAULT_FORMATS,
+    STYLES,
+    POSTER_STYLE,
+    PAPER_STYLE,
+)
 
 # Keep text as real text objects in SVGs (editable in Illustrator/Inkscape)
 # instead of converting glyphs to paths. Requires the font to be installed on
@@ -72,34 +77,6 @@ METRIC_INFO = {
     "dprime_matrix": ("dprime", "D′"),
     "accuracy_matrix": ("accuracy", "Decoding accuracy"),
 }
-
-# ----------------------------------------------------------------------------
-# Style presets -- the single place to change figure size / text size.
-# ----------------------------------------------------------------------------
-POSTER_STYLE = dict(
-    figsize=(9, 8),
-    title_fontsize=22,
-    label_fontsize=20,
-    tick_fontsize=16,
-    legend_fontsize=15,
-    star_fontsize=16,
-    box_width=0.6,
-    dpi=300,
-)
-
-PAPER_STYLE = dict(
-    figsize=(4.5, 4),
-    title_fontsize=11,
-    label_fontsize=10,
-    tick_fontsize=9,
-    legend_fontsize=8,
-    star_fontsize=9,
-    box_width=0.6,
-    dpi=300,
-)
-
-STYLES = {"poster": POSTER_STYLE, "paper": PAPER_STYLE}
-
 
 def _region_groups(data_source):
     """
