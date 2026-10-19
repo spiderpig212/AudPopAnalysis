@@ -1840,7 +1840,7 @@ class TwoRegionCCAAnalysis:
 if __name__ == "__main__":
     # Initialize analysis
     analyzer = TwoRegionCCAAnalysis(neuron_threshold=40, n_splits=5, random_state=42,
-                                   n_permutations=10000)  # TODO: Will want to do with n_permutations=10000 at some point
+                                   n_permutations=1000)  # TODO: Will want to do with n_permutations=10000 at some point
 
     # Debugging section for multi-threading
     # import pickle
