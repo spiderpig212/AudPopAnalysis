@@ -42,7 +42,7 @@ import pandas as pd
 from analysis_class import FiringRateAnalysis
 
 response_ranges = ["onset", "sustained", "offset"]
-neuron_threshold = 20
+neuron_threshold = 30
 n_splits = 5  # Number of random neuron subsamples to average over
 
 # SVC hyperparameter search settings

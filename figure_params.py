@@ -49,6 +49,16 @@ REGIONS = ["Primary auditory area", "Ventral auditory area", "Dorsal auditory ar
 REGION_SHORT = {"Primary auditory area": "Primary",
                 "Ventral auditory area": "Ventral",
                 "Dorsal auditory area": "Dorsal"}
+# RSA matrix field -> (tag used in output filenames, axis / colorbar label).
+# "J_matrix" and "dprime_matrix" are separability metrics computed from the
+# decoder's projection axis (labelled D' throughout); "accuracy_matrix" is the
+# binary decoder's own cross-validated classification accuracy.
+METRIC_INFO = {
+    "J_matrix": ("J", "D′"),
+    "dprime_matrix": ("dprime", "D′"),
+    "accuracy_matrix": ("accuracy", "Decoding accuracy"),
+}
+
 STIM_TYPES = ["naturalSound", "AM", "pureTones"]
 STIM_LABELS = {"naturalSound": "Natural sounds", "AM": "AM noise",
                "pureTones": "Pure tones"}
@@ -96,6 +106,8 @@ POSTER_STYLE = dict(
         raster_sheet=(18, 14),
         pca=(8, 6.5),
         pca_grid=(16, 14),
+        pca_pair=(7, 6),
+        heatmap=(8, 7),
     ),
 )
 
@@ -118,6 +130,8 @@ PAPER_STYLE = dict(
         raster_sheet=(10, 8),
         pca=(3.8, 3.0),
         pca_grid=(7.5, 6.8),
+        pca_pair=(3.4, 3.0),
+        heatmap=(3.6, 3.2),
     ),
 )
 
@@ -201,3 +215,22 @@ SPEC_PARAMS = {
 }
 SPEC_DYNAMIC_RANGE_DB = 60  # color range below each sound's own peak
 SPEC_CMAP = "magma"
+
+
+# ----------------------------------------------------------------------------
+# Supporting decoder panels (supp_decoder_data.py / supp_decoder_figures.py)
+# ----------------------------------------------------------------------------
+# Region whose neurons are decoded in the example pair panels and heat maps.
+SUPP_REGION = "Primary auditory area"
+
+# Example stimulus pairs for the PC-space decoder panels, as indices into
+# np.unique(stimArray) (so (0, 1) = the two lowest stimuli). None = auto-pick the
+# pair whose separability is closest to the median of the entries that feed the
+# box plots (near-diagonal for AM / pure tones; within- or between-source for
+# natural sounds), using the example session's matrix.
+SUPP_PAIRS = {"AM": None, "pureTones": None,
+              "naturalSound_within": None, "naturalSound_between": None}
+
+# The two stimuli of a pair; contrasting, colorblind-safe, and distinct from the
+# region and natural-category colors.
+PAIR_COLORS = ("#D55E00", "#56B4E9")

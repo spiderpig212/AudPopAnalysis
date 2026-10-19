@@ -58,6 +58,7 @@ from d_prime_RSA_visualization import (
 from figure_params import (
     MAIN_RESPONSE_RANGE,
     DEFAULT_FORMATS,
+    METRIC_INFO,
     STYLES,
     POSTER_STYLE,
     PAPER_STYLE,
@@ -68,15 +69,6 @@ from figure_params import (
 # the machine that opens the SVG.
 plt.rcParams["svg.fonttype"] = "none"
 
-# Maps the RSA matrix field name to (tag used in output filenames, y-axis
-# label). "J_matrix" and "dprime_matrix" are both separability metrics
-# computed from the decoder's projection axis; "accuracy_matrix" is the
-# binary decoder's own cross-validated classification accuracy.
-METRIC_INFO = {
-    "J_matrix": ("J", "D′"),
-    "dprime_matrix": ("dprime", "D′"),
-    "accuracy_matrix": ("accuracy", "Decoding accuracy"),
-}
 
 def _region_groups(data_source):
     """

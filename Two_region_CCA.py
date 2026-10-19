@@ -719,34 +719,34 @@ class TwoRegionCCAAnalysis:
 
         return results_df
 
-    def create_summary_plots(self, results_df):
-        """
-        Create summary plots of the analysis results
-        """
-        # Summary of significant components by region pair
-        plt.figure(figsize=(15, 8))
-        sns.boxplot(data=results_df, x='region_pair', y='significant_components')
-        plt.xticks(rotation=45, ha='right')
-        plt.title('Number of Significant CCA Components by Region Pair (Permutation Test)')
-        plt.ylabel('Number of Significant Components')
-        plt.tight_layout()
-        plt.savefig(os.path.join(self.output_dir, "summary_significant_components.png"),
-                    dpi=300, bbox_inches='tight')
-        plt.show()
-
-        # Summary by stimulus and response range
-        if len(results_df['stimulus'].unique()) > 1:
-            plt.figure(figsize=(15, 10))
-            sns.boxplot(data=results_df, x='region_pair', y='significant_components',
-                        hue='stimulus')
-            plt.xticks(rotation=45, ha='right')
-            plt.title('Number of Significant CCA Components by Region Pair and Stimulus (Permutation Test)')
-            plt.ylabel('Number of Significant Components')
-            plt.legend(bbox_to_anchor=(1.05, 1), loc='upper left')
-            plt.tight_layout()
-            plt.savefig(os.path.join(self.output_dir, "summary_by_stimulus.png"),
-                        dpi=300, bbox_inches='tight')
-            plt.show()
+    # def create_summary_plots(self, results_df):
+    #     """
+    #     Create summary plots of the analysis results
+    #     """
+    #     # Summary of significant components by region pair
+    #     plt.figure(figsize=(15, 8))
+    #     sns.boxplot(data=results_df, x='region_pair', y='significant_components')
+    #     plt.xticks(rotation=45, ha='right')
+    #     plt.title('Number of Significant CCA Components by Region Pair (Permutation Test)')
+    #     plt.ylabel('Number of Significant Components')
+    #     plt.tight_layout()
+    #     plt.savefig(os.path.join(self.output_dir, "summary_significant_components.png"),
+    #                 dpi=300, bbox_inches='tight')
+    #     plt.show()
+    #
+    #     # Summary by stimulus and response range
+    #     if len(results_df['stimulus'].unique()) > 1:
+    #         plt.figure(figsize=(15, 10))
+    #         sns.boxplot(data=results_df, x='region_pair', y='significant_components',
+    #                     hue='stimulus')
+    #         plt.xticks(rotation=45, ha='right')
+    #         plt.title('Number of Significant CCA Components by Region Pair and Stimulus (Permutation Test)')
+    #         plt.ylabel('Number of Significant Components')
+    #         plt.legend(bbox_to_anchor=(1.05, 1), loc='upper left')
+    #         plt.tight_layout()
+    #         plt.savefig(os.path.join(self.output_dir, "summary_by_stimulus.png"),
+    #                     dpi=300, bbox_inches='tight')
+    #         plt.show()
 
 
     def create_detailed_summary_table(self, results_df):
