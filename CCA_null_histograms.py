@@ -261,10 +261,6 @@ def make_combined_figures(df: pd.DataFrame, out_root: str):
                 )
                 _save_figure(fig, out_path)
 
-
-# ---------------------------------------------------------------------------
-# Entry point
-# ---------------------------------------------------------------------------
 def main():
     fr_db = FiringRateAnalysis(db_suffix="coords_updated")
     file_path = fr_db.figdata_path

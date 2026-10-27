@@ -7,9 +7,11 @@ Panels produced (each saved as its own file so they can be assembled externally)
   3   AM-noise and pure-tone spectrograms
   4   Sorted spike rasters for the cells in figure_params.RASTER_CELLS, plus
       candidate sheets (per stimulus type, rows = region) to choose them from
-  5.1 PC space, all regions fit together, natural sounds
-  5.2 PC space, Primary auditory area only, natural sounds
-  5.3 PC space, every region x every stimulus type (3x3 grid)
+  5   PC space for natural sounds, one panel per brain region in a row, category
+      key centered beneath (make_pca_natural_row)
+      The earlier panels 5.1 (all regions fit together), 5.2 (Primary only) and
+      5.3 (3x3 region x stimulus grid) remain in make_pca_panels, run with
+      steps=("pca_legacy",).
 
 Panels 1 and the sound list in 2 are supplied from lab resources.
 Size/text come from figure_params.STYLES ("paper" / "poster").
@@ -29,6 +31,7 @@ import figure_params as fp
 import studyparams
 
 FIG = "figure1"
+RASTER_BG_ALPHA = 0.18  # opacity of each stimulus's row background in the rasters
 _FREQ_TICKS_KHZ = {"naturalSound": [1, 2, 5, 10, 20], "AM": [2, 4, 8, 16, 32, 64],
                    "pureTones": [2, 4, 8, 16, 32, 64]}
 
@@ -78,31 +81,41 @@ def _natural_label(i):
     return f"{studyparams.SOUND_CATEGORIES[cat]} {ex + 1}"
 
 
+def _spectrogram_title(stim, spec, index):
+    if stim == "naturalSound":
+        return _natural_label(index)
+    if stim == "AM":
+        return f"AM noise, {spec['labels'][index]:.1f} Hz modulation"
+    return f"Pure tone, {spec['labels'][index] / 1000:.1f} kHz"
+
+
 def make_spectrogram_panels(data_dir, out_dir, style_name, formats):
+    """One panel per sound type: its two example sounds stacked, sharing the time
+    axis and one colorbar."""
     style = fp.STYLES[style_name]
-    size = style["panel_figsize"]["spectrogram"]
-    cat, ex = fp.EXAMPLE_NATURAL_SOUND
-    jobs = [("naturalSound", cat * fp.EXEMPLARS_PER_CATEGORY + ex, "fig1_panel2_natural_spectrogram"),
-            ("AM", None, "fig1_panel3_AM_spectrogram"),
-            ("pureTones", None, "fig1_panel3_pureTone_spectrogram")]
-    targets = {"AM": fp.EXAMPLE_AM_RATE, "pureTones": fp.EXAMPLE_PT_FREQ}
+    jobs = [("naturalSound", "fig1_panel2_natural_spectrograms"),
+            ("AM", "fig1_panel3_AM_spectrograms"),
+            ("pureTones", "fig1_panel3_pureTone_spectrograms")]
 
     with plt.rc_context(fp.rc_params(style)):
-        for stim, index, name in jobs:
+        for stim, name in jobs:
             spec = _load_spec(data_dir, stim)
             if spec is None:
                 continue
-            if index is None:
-                index = int(np.argmin(np.abs(spec["labels"].astype(float) - targets[stim])))
-            fig, ax = plt.subplots(figsize=size, layout="constrained")
-            _draw_spectrogram(ax, spec, index, stim, style)
             if stim == "naturalSound":
-                title = _natural_label(index)
-            elif stim == "AM":
-                title = f"AM noise, {spec['labels'][index]:.1f} Hz modulation"
+                indices = [c * fp.EXEMPLARS_PER_CATEGORY + e for c, e in fp.EXAMPLE_NATURAL_SOUNDS]
             else:
-                title = f"Pure tone, {spec['labels'][index] / 1000:.1f} kHz"
-            ax.set_title(title)
+                targets = fp.EXAMPLE_AM_RATES if stim == "AM" else fp.EXAMPLE_PT_FREQS
+                indices = [int(np.argmin(np.abs(spec["labels"].astype(float) - t))) for t in targets]
+
+            fig, axes = plt.subplots(len(indices), 1, sharex=True, layout="constrained",
+                                     figsize=style["panel_figsize"]["spectrogram_pair"])
+            for ax, index in zip(axes, indices):
+                im = _draw_spectrogram(ax, spec, index, stim, style, colorbar=False, small=True)
+                ax.set_ylabel("Frequency (kHz)")
+                ax.set_title(_spectrogram_title(stim, spec, index))
+            axes[-1].set_xlabel("Time (s)")
+            fig.colorbar(im, ax=axes, pad=0.02).set_label("dB")
             fp.save_figure(fig, out_dir, f"{name}_{style_name}", style, formats)
 
         # Contact sheet of all 20 natural sounds, to choose the example from.
@@ -123,15 +136,19 @@ def make_spectrogram_panels(data_dir, out_dir, style_name, formats):
 def _draw_raster(ax, cell, stim, style, label_axes=True):
     n = len(cell["uniq_stims"])
     colors = fp.stim_point_colors(stim, n)
-    ax.axvspan(0, fp.STIM_DURATION[stim], color="0.92", zorder=0, lw=0)
     ax.scatter(cell["spike_times"], cell["trial_rank"], s=style["raster_marker_size"],
                marker="|", linewidths=style["line_width"] * 0.6, color="black", zorder=2)
 
+    # Each stimulus's block of trials gets a faint background in its color.
     edges = np.concatenate([[0], np.cumsum(cell["trials_per_stim"])])
     for k in range(n):
-        ax.add_patch(Rectangle((1.015, edges[k]), 0.035, edges[k + 1] - edges[k],
-                               transform=ax.get_yaxis_transform(), clip_on=False,
-                               color=colors[k], lw=0))
+        ax.axhspan(edges[k], edges[k + 1], color=colors[k], alpha=RASTER_BG_ALPHA,
+                   lw=0, zorder=0)
+
+    # Sound duration as a grey bar just above the axes (x in data, y in axes units).
+    ax.add_patch(Rectangle((0, 1.012), fp.STIM_DURATION[stim], 0.035,
+                           transform=ax.get_xaxis_transform(), clip_on=False,
+                           color="0.45", lw=0))
     ax.set_xlim(*fp.RASTER_XLIM[stim])
     ax.set_ylim(0, cell["n_trials"])
     ax.set_yticks([0, cell["n_trials"]])
@@ -168,7 +185,8 @@ def make_raster_panels(data_dir, out_dir, style_name, formats):
                     ax.set_title(f"row {c['row']}  {c['mouse']} {c['date']}\n"
                                  f"score {c['score']:.2f}, {c['rate']:.1f} Hz",
                                  fontsize=style["tick_fontsize"],
-                                 color=fp.REGION_COLORS[region])
+                                 color=fp.REGION_COLORS[region],
+                                 pad=style["raster_title_pad"])
                     if j == 0:
                         ax.annotate(fp.REGION_SHORT[region], xy=(-0.3, 0.5), rotation=90,
                                     xycoords="axes fraction", ha="center", va="center",
@@ -187,7 +205,7 @@ def make_raster_panels(data_dir, out_dir, style_name, formats):
                 continue
             fig, ax = plt.subplots(figsize=style["panel_figsize"]["raster"], layout="constrained")
             _draw_raster(ax, cell, stim, style)
-            ax.set_title(f"{fp.STIM_LABELS[stim]}", color="black")
+            ax.set_title(f"{fp.STIM_LABELS[stim]}", color="black", pad=style["raster_title_pad"])
             fp.save_figure(fig, out_dir, f"fig1_panel4_raster_{stim}_{style_name}", style, formats)
 
 
@@ -209,7 +227,7 @@ def _draw_pca(ax, entry, stim, style, show_labels=True):
 
 
 def _natural_legend_handles(style):
-    return [Line2D([0], [0], marker="o", linestyle="", markersize=8,
+    return [Line2D([0], [0], marker="o", linestyle="", markersize=style["legend_fontsize"] * 0.9,
                    color=fp.NATURAL_CATEGORY_COLORS[i], label=name)
             for i, name in enumerate(studyparams.SOUND_CATEGORIES)]
 
@@ -275,6 +293,28 @@ def make_pca_panels(data_dir, out_dir, style_name, formats):
     print(f"[pca] panels use session {session_note}, window {meta['window']}")
 
 
+def make_pca_natural_row(data_dir, out_dir, style_name, formats):
+    """Natural-sound PC space, one panel per brain region side by side, with the
+    sound-category key centered beneath the whole row."""
+    data = _load_pickle(data_dir, "pca_data.pkl")
+    if data is None:
+        return
+    style = fp.STYLES[style_name]
+    meta = data["meta"]
+
+    with plt.rc_context(fp.rc_params(style)):
+        fig, axes = plt.subplots(1, len(fp.REGIONS), squeeze=False,
+                                 figsize=style["panel_figsize"]["pca_row"], layout="constrained")
+        for ax, region in zip(axes[0], fp.REGIONS):
+            _draw_pca(ax, data["naturalSound"][region], "naturalSound", style)
+            ax.set_title(fp.REGION_SHORT[region], color=fp.REGION_COLORS[region])
+        fig.legend(handles=_natural_legend_handles(style), loc="outside lower center",
+                   ncol=len(studyparams.SOUND_CATEGORIES), frameon=False)
+        fp.save_figure(fig, out_dir, f"fig1_panel5_pca_natural_row_{style_name}", style, formats)
+    print(f"[pca] natural-sound row uses session {meta['session'].replace('|', ' ')}, "
+          f"window {meta['window']}")
+
+
 # ----------------------------------------------------------------------------
 # Driver
 # ----------------------------------------------------------------------------
@@ -287,6 +327,8 @@ def main(style_name="paper", formats=fp.DEFAULT_FORMATS,
     if "rasters" in steps:
         make_raster_panels(data_dir, out_dir, style_name, formats)
     if "pca" in steps:
+        make_pca_natural_row(data_dir, out_dir, style_name, formats)
+    if "pca_legacy" in steps:  # earlier panels 5.1 / 5.2 / 5.3
         make_pca_panels(data_dir, out_dir, style_name, formats)
 
 

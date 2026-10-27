@@ -365,7 +365,8 @@ def main(style_name="paper", response_ranges=(MAIN_RESPONSE_RANGE,),
 
 if __name__ == "__main__":
     # Main poster/paper figures: sustained response range only.
-    # main(style_name="paper", response_ranges=("sustained",), metric_key="J_matrix")
+    # main(style_name="paper", response_ranges=("sustained",), metric_key="J_matrix",
+    # formats=("png", "svg"))
     main(style_name="paper", response_ranges=("sustained",), metric_key="accuracy_matrix",
          formats=("png", "svg"))
     # main(style_name="poster", response_ranges=("sustained",), formats=("svg",))

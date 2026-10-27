@@ -32,7 +32,7 @@ import figure_params as fp
 # ----------------------------------------------------------------------------
 # Calculation constants
 # ----------------------------------------------------------------------------
-PCA_NEURONS = 20      # neurons drawn per region, as in the RSA/CCA pipeline
+PCA_NEURONS = 40      # neurons drawn per region, as in the RSA/CCA pipeline
 PCA_SEED = 0
 PCA_ZSCORE = True    # False: mean-center only (as in PCA_analysis.py)
 PCA_N_SAVED = 3       # leading PC scores stored per fit (all variance ratios kept)

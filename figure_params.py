@@ -100,12 +100,18 @@ POSTER_STYLE = dict(
     axis_linewidth=1.5,
     pca_marker_size=30,
     raster_marker_size=14,
+    raster_title_pad=22,  # clears the sound-duration bar above raster axes
     panel_figsize=dict(
         spectrogram=(9, 5),
+        spectrogram_pair=(9, 8.5),
         raster=(8, 7),
         raster_sheet=(18, 14),
         pca=(8, 6.5),
         pca_grid=(16, 14),
+        pca_row=(18, 6.5),
+        method_panel=(6, 5.2),
+        method_strip_real=(30, 5.5),
+        method_strip_cartoon=(24, 5.5),
         pca_pair=(7, 6),
         heatmap=(8, 7),
     ),
@@ -124,12 +130,18 @@ PAPER_STYLE = dict(
     axis_linewidth=0.8,
     pca_marker_size=8,
     raster_marker_size=6,
+    raster_title_pad=14,  # clears the sound-duration bar above raster axes
     panel_figsize=dict(
         spectrogram=(3.6, 2.3),
+        spectrogram_pair=(3.6, 3.8),
         raster=(3.4, 3.0),
         raster_sheet=(10, 8),
         pca=(3.8, 3.0),
         pca_grid=(7.5, 6.8),
+        pca_row=(7.5, 3.0),
+        method_panel=(3.2, 2.8),
+        method_strip_real=(12, 2.8),
+        method_strip_cartoon=(9.6, 2.8),
         pca_pair=(3.4, 3.0),
         heatmap=(3.6, 3.2),
     ),
@@ -186,9 +198,12 @@ def stim_point_colors(stim, n_stim):
 # Figure 1 -- example selections (edit these to change what is shown)
 # ----------------------------------------------------------------------------
 # Spectrogram examples (panels 2 and 3).
-EXAMPLE_NATURAL_SOUND = (0, 0)   # (category index 0-4, exemplar 0-3); 0 = Frogs
-EXAMPLE_AM_RATE = 16.0           # Hz; one of 4, 5.7, 8, 11.3, 16, 22.6, 32, 45.3, 64, 90.5, 128
-EXAMPLE_PT_FREQ = 8066           # Hz; one of the 16 tone frequencies
+# Two examples per sound type, drawn stacked (first on top). Chosen to differ in structure:
+# narrow-band pulsed Frogs vs broadband Streamside noise; slow vs fast modulation; low vs
+# high tone.
+EXAMPLE_NATURAL_SOUNDS = [(0, 0), (2, 0)]   # (category index 0-4, exemplar 0-3); 0 = Frogs, 2 = Streamside
+EXAMPLE_AM_RATES = [8.0, 64.0]              # Hz; any of 4, 5.7, 8, 11.3, 16, 22.6, 32, 45.3, 64, 90.5, 128
+EXAMPLE_PT_FREQS = [2974, 21878]            # Hz; any of the 16 tone frequencies
 
 # PC-space example session as (mouse, date). None = auto-pick the session with
 # the most neurons in its smallest region across all stimulus types.
