@@ -19,6 +19,11 @@ In both approaches the x-axis is z-score space. The null similarities are
 z-scored per row (each session/pair/stimulus/response_range has its own null
 distribution) before pooling or plotting.
 
+Sizes, fonts and line widths come from figure_params.STYLES ("paper" / "poster"),
+like the other final-figure scripts; output goes to
+figure_params.figure_output_dir("cca_null_histograms", style_name) and can be written as
+png and/or svg.
+
 Kept as a separate file for research-archiving purposes.
 """
 
@@ -29,9 +34,13 @@ import pandas as pd
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
+from matplotlib.patches import Ellipse
 from scipy import stats
 
 from analysis_class import FiringRateAnalysis
+import figure_params as fp
+
+FIG = "cca_null_histograms"
 
 # ---------------------------------------------------------------------------
 # Configuration
@@ -43,6 +52,14 @@ STIM_TYPES = ["AM", "pureTones", "naturalSound"]
 NULL_COLOR = "#AAAAAA"       # gray fill for null histogram
 ACTUAL_LINE_COLOR = "#C44E52"  # red for the vertical actual-value line(s)
 N_HIST_BINS = 30
+
+# Subspace-alignment inset: outside +/-INSET_Z_THRESHOLD the two region ellipses are drawn
+# perpendicular, inside it they are drawn strongly overlapping. For the combined figures
+# the deciding value is set by INSET_RULE: "median" (median of the sessions' actual z) or
+# "any" (any session's actual z lies outside the threshold).
+INSET_Z_THRESHOLD = 2.0
+INSET_RULE = "median"
+INSET_OVERLAP_ANGLE = 10      # degrees between the ellipses' long axes when "aligned"
 
 
 # ---------------------------------------------------------------------------
@@ -95,189 +112,240 @@ def parse_null_similarities(val):
 # ---------------------------------------------------------------------------
 # Shared plot helpers
 # ---------------------------------------------------------------------------
-def _setup_histogram_ax(ax, z_null: np.ndarray, title: str, metric_label: str):
-    """
-    Draw the z-scored null histogram on `ax` and return the computed x-limits
-    so vertical lines can be clipped sensibly.
-    """
+def _short_pair(target_pair: str) -> str:
+    """'Pri-Ventral auditory area vs Pri-Dorsal auditory area' -> 'Pri-Ventral vs Pri-Dorsal'."""
+    return target_pair.replace(" auditory area", "")
+
+
+def _setup_histogram_ax(ax, z_null: np.ndarray, title: str, style: dict):
+    """Draw the z-scored null histogram and the z = 0 reference line on `ax`."""
     ax.hist(z_null, bins=N_HIST_BINS, color=NULL_COLOR, edgecolor="white",
             alpha=0.85, density=True, label="Null distribution")
-    ax.axvline(0, color="black", linestyle="--", linewidth=1.0, alpha=0.6,
-               label="z = 0")
-    ax.set_xlabel("Z-score", fontsize=10)
-    ax.set_ylabel("Density", fontsize=10)
-    ax.set_title(title, fontsize=9)
-    return ax.get_xlim()
+    ax.axvline(0, color="black", linestyle="--", linewidth=style["line_width"],
+               alpha=0.6, label="z = 0")
+    ax.set_xlabel("Z-score")
+    ax.set_ylabel("Density")
+    ax.set_title(title)
 
 
-def _save_figure(fig, out_path: str):
-    os.makedirs(os.path.dirname(out_path), exist_ok=True)
-    fig.savefig(out_path, dpi=150, bbox_inches="tight")
-    plt.close(fig)
-    print(f"Saved: {out_path}")
+def _make_axes(figsize):
+    """
+    Histogram axes plus a right-hand column (laid out with the figure, so nothing can
+    collide): the legend on top and the subspace-alignment cartoon below it.
+    """
+    fig = plt.figure(figsize=figsize, layout="constrained")
+    gs = fig.add_gridspec(2, 2, width_ratios=[2, 1], height_ratios=[1, 1])
+    ax = fig.add_subplot(gs[:, 0])
+    legend_ax = fig.add_subplot(gs[0, 1])
+    inset = fig.add_subplot(gs[1, 1])
+    legend_ax.axis("off")
+    return fig, ax, legend_ax, inset
+
+
+def _side_legend(legend_ax, ax, handles=None):
+    legend_ax.legend(handles=handles if handles is not None else ax.get_legend_handles_labels()[0],
+                     loc="center left", bbox_to_anchor=(0.0, 0.5), frameon=False,
+                     handlelength=1.6)
+
+
+def _pair_regions(target_pair: str):
+    """[(short name, color), ...] for the two regions in 'Pri-X auditory area vs Pri-Y auditory area'."""
+    out = []
+    for part in target_pair.split(" vs "):
+        name = part.replace("Pri-", "", 1)
+        out.append((fp.REGION_SHORT.get(name, name.replace(" auditory area", "")),
+                    fp.REGION_COLORS.get(name, "0.5")))
+    return out
+
+
+def _add_alignment_inset(inset, target_pair: str, orthogonal: bool, style: dict):
+    """
+    Cartoon of the two regions' subspaces beside the histogram: perpendicular ellipses
+    when the result is beyond +/-INSET_Z_THRESHOLD, strongly overlapping ones otherwise.
+    """
+    regions = _pair_regions(target_pair)
+    inset.set_aspect("equal", adjustable="box")
+    angles = (0, 90) if orthogonal else (0, INSET_OVERLAP_ANGLE)
+    for (_, color), angle in zip(regions, angles):
+        inset.add_patch(Ellipse((0, 0), width=2.0, height=0.8, angle=angle, facecolor=color,
+                                edgecolor=color, alpha=0.55, linewidth=style["line_width"]))
+    inset.set_xlim(-1.1, 1.1)
+    inset.set_ylim(-1.1, 1.1)
+    inset.axis("off")
+    inset.set_title("More orthogonal" if orthogonal else "More aligned",
+                    fontsize=style["legend_fontsize"], pad=2)
+    fs = style["legend_fontsize"]
+    for k, (name, color) in enumerate(regions):   # region names stacked under the ellipses
+        inset.annotate(name, (0.5, 0.0), xycoords="axes fraction", xytext=(0, -4 - 1.3 * fs * k),
+                       textcoords="offset points", color=color, ha="center", va="top",
+                       fontsize=fs, fontweight="bold", annotation_clip=False)
+
+
+def _is_orthogonal(z_values) -> bool:
+    z = np.asarray(z_values, dtype=float)
+    if INSET_RULE == "any":
+        return bool(np.any(np.abs(z) > INSET_Z_THRESHOLD))
+    return bool(abs(np.median(z)) > INSET_Z_THRESHOLD)
 
 
 # ---------------------------------------------------------------------------
 # Approach 1 — per-session figures
 # ---------------------------------------------------------------------------
-def make_per_session_figures(df: pd.DataFrame, out_root: str):
+def make_per_session_figures(df: pd.DataFrame, out_root: str, style_name="paper",
+                             formats=fp.DEFAULT_FORMATS):
     """
     One figure per (session, target_pair, stimulus, response_range).
-    Output: out_root/per_session/{stimulus}/{response_range}/{target_pair}/{session}.png
+    Output: out_root/per_session/{stimulus}/{response_range}/{target_pair}/{session}.<fmt>
     """
-    for stim in STIM_TYPES:
-        stim_df = df[df["stimulus"] == stim]
-        if stim_df.empty:
-            continue
-
-        for response_range in RESPONSE_RANGE_ORDER:
-            rr_df = stim_df[stim_df["response_range"] == response_range]
-            if rr_df.empty:
+    style = fp.STYLES[style_name]
+    with plt.rc_context(fp.rc_params(style)):
+        for stim in STIM_TYPES:
+            stim_df = df[df["stimulus"] == stim]
+            if stim_df.empty:
                 continue
 
-            for target_pair in sorted(rr_df["target_pair"].unique()):
-                tp_df = rr_df[rr_df["target_pair"] == target_pair]
+            for response_range in RESPONSE_RANGE_ORDER:
+                rr_df = stim_df[stim_df["response_range"] == response_range]
+                if rr_df.empty:
+                    continue
 
-                for _, row in tp_df.iterrows():
-                    session = row["session"]
+                for target_pair in sorted(rr_df["target_pair"].unique()):
+                    tp_df = rr_df[rr_df["target_pair"] == target_pair]
 
-                    # Parse and z-score this row's null distribution.
-                    raw_null = parse_null_similarities(row["null_similarities"])
-                    if len(raw_null) < 3:
-                        print(f"Skipping {session}/{target_pair}/{stim}/"
-                              f"{response_range}: too few null values.")
-                        continue
-                    z_null = zscore_null_row(raw_null)
+                    for _, row in tp_df.iterrows():
+                        session = row["session"]
 
-                    # Actual value is already in z-score space.
-                    z_actual = float(row["z_score_diff_from_null"])
+                        # Parse and z-score this row's null distribution.
+                        raw_null = parse_null_similarities(row["null_similarities"])
+                        if len(raw_null) < 3:
+                            print(f"Skipping {session}/{target_pair}/{stim}/"
+                                  f"{response_range}: too few null values.")
+                            continue
+                        z_null = zscore_null_row(raw_null)
 
-                    fig, ax = plt.subplots(figsize=(5, 4))
-                    title = (f"{target_pair}\n"
-                             f"{stim} | {response_range} | session {session}")
-                    _setup_histogram_ax(ax, z_null, title,
-                                        metric_label="Z-score")
+                        # Actual value is already in z-score space.
+                        z_actual = float(row["z_score_diff_from_null"])
 
-                    ax.axvline(z_actual, color=ACTUAL_LINE_COLOR,
-                               linewidth=1.8, linestyle="-",
-                               label=f"Actual (z = {z_actual:.2f})")
-                    ax.legend(fontsize=8, loc="upper left")
-                    fig.tight_layout()
+                        fig, ax, legend_ax, inset = _make_axes(style["panel_figsize"]["null_hist_session"])
+                        title = (f"{_short_pair(target_pair)}\n"
+                                 f"{fp.STIM_LABELS.get(stim, stim)}, {response_range}\n"
+                                 f"session {session}")
+                        _setup_histogram_ax(ax, z_null, title, style)
+                        ax.axvline(z_actual, color=ACTUAL_LINE_COLOR,
+                                   linewidth=style["line_width"] * 1.8, linestyle="-",
+                                   label=f"Actual (z = {z_actual:.2f})")
+                        _side_legend(legend_ax, ax)
+                        _add_alignment_inset(inset, target_pair, _is_orthogonal([z_actual]), style)
 
-                    # Sanitise target_pair for use as a directory name.
-                    pair_dir = target_pair.replace(" ", "_").replace("/", "-")
-                    out_path = (
-                        f"{out_root}/per_session/{stim}/{response_range}/"
-                        f"{pair_dir}/{session}.png"
-                    )
-                    _save_figure(fig, out_path)
+                        # Sanitise target_pair for use as a directory name.
+                        pair_dir = target_pair.replace(" ", "_").replace("/", "-")
+                        fp.save_figure(fig, f"{out_root}/per_session/{stim}/{response_range}/{pair_dir}",
+                                       str(session), style, formats)
 
 
 # ---------------------------------------------------------------------------
 # Approach 2 — combined (pooled null, all sessions' actual lines)
 # ---------------------------------------------------------------------------
-def make_combined_figures(df: pd.DataFrame, out_root: str):
+def make_combined_figures(df: pd.DataFrame, out_root: str, style_name="paper",
+                          formats=fp.DEFAULT_FORMATS):
     """
     One figure per (target_pair, stimulus, response_range).
     Pools z-scored nulls across all sessions (each row z-scored against its
     own null), then draws one vertical line per session for the actual value.
-    Output: out_root/combined/{stimulus}/{response_range}/{target_pair}.png
+    Output: out_root/combined/{stimulus}/{response_range}/{target_pair}.<fmt>
     """
-    for stim in STIM_TYPES:
-        stim_df = df[df["stimulus"] == stim]
-        if stim_df.empty:
-            continue
-
-        for response_range in RESPONSE_RANGE_ORDER:
-            rr_df = stim_df[stim_df["response_range"] == response_range]
-            if rr_df.empty:
+    style = fp.STYLES[style_name]
+    with plt.rc_context(fp.rc_params(style)):
+        for stim in STIM_TYPES:
+            stim_df = df[df["stimulus"] == stim]
+            if stim_df.empty:
                 continue
 
-            for target_pair in sorted(rr_df["target_pair"].unique()):
-                tp_df = rr_df[rr_df["target_pair"] == target_pair]
-
-                # Pool z-scored nulls and collect actual values across sessions.
-                pooled_z_null = []
-                actual_z_values = []  # one per session
-                sessions_used = []
-
-                for _, row in tp_df.iterrows():
-                    raw_null = parse_null_similarities(row["null_similarities"])
-                    if len(raw_null) < 3:
-                        print(f"Skipping session {row['session']} in combined "
-                              f"plot ({target_pair}/{stim}/{response_range}): "
-                              f"too few null values.")
-                        continue
-                    # Z-score each row against its own null distribution so
-                    # values are comparable across sessions.
-                    z_null = zscore_null_row(raw_null)
-                    pooled_z_null.append(z_null)
-                    actual_z_values.append(float(row["z_score_diff_from_null"]))
-                    sessions_used.append(row["session"])
-
-                if len(pooled_z_null) == 0:
+            for response_range in RESPONSE_RANGE_ORDER:
+                rr_df = stim_df[stim_df["response_range"] == response_range]
+                if rr_df.empty:
                     continue
 
-                # Single pooled null histogram.
-                all_z_null = np.concatenate(pooled_z_null)
+                for target_pair in sorted(rr_df["target_pair"].unique()):
+                    tp_df = rr_df[rr_df["target_pair"] == target_pair]
 
-                fig, ax = plt.subplots(figsize=(6, 4))
-                n_sessions = len(sessions_used)
-                title = (f"{target_pair}\n"
-                         f"{stim} | {response_range} | "
-                         f"n = {n_sessions} session(s)")
-                _setup_histogram_ax(ax, all_z_null, title,
-                                    metric_label="Z-score")
+                    # Pool z-scored nulls and collect actual values across sessions.
+                    pooled_z_null = []
+                    actual_z_values = []  # one per session
+                    sessions_used = []
 
-                # One vertical line per session; all the same color since we
-                # are interested in spread relative to the null, not per-session
-                # differences.
-                for z_actual in actual_z_values:
-                    ax.axvline(z_actual, color=ACTUAL_LINE_COLOR,
-                               linewidth=1.4, linestyle="-", alpha=0.7)
+                    for _, row in tp_df.iterrows():
+                        raw_null = parse_null_similarities(row["null_similarities"])
+                        if len(raw_null) < 3:
+                            print(f"Skipping session {row['session']} in combined "
+                                  f"plot ({target_pair}/{stim}/{response_range}): "
+                                  f"too few null values.")
+                            continue
+                        # Z-score each row against its own null distribution so
+                        # values are comparable across sessions.
+                        z_null = zscore_null_row(raw_null)
+                        pooled_z_null.append(z_null)
+                        actual_z_values.append(float(row["z_score_diff_from_null"]))
+                        sessions_used.append(row["session"])
 
-                # Summarise the actual values (median + IQR) in the legend.
-                median_z = np.median(actual_z_values)
-                q25, q75 = np.percentile(actual_z_values, [25, 75])
-                actual_handle = plt.Line2D(
-                    [0], [0], color=ACTUAL_LINE_COLOR, linewidth=1.8,
-                    label=f"Actual values (n={n_sessions})\n"
-                          f"median z = {median_z:.2f} "
-                          f"[{q25:.2f}, {q75:.2f}]")
-                null_handle = plt.Line2D(
-                    [0], [0], color=NULL_COLOR, linewidth=8, alpha=0.85,
-                    label="Pooled null distribution")
-                zero_handle = plt.Line2D(
-                    [0], [0], color="black", linestyle="--", linewidth=1.0,
-                    label="z = 0")
-                ax.legend(handles=[null_handle, zero_handle, actual_handle],
-                          fontsize=8, loc="upper left")
-                fig.tight_layout()
+                    if len(pooled_z_null) == 0:
+                        continue
 
-                pair_dir = target_pair.replace(" ", "_").replace("/", "-")
-                out_path = (
-                    f"{out_root}/combined/{stim}/{response_range}/"
-                    f"{pair_dir}.svg"
-                )
-                _save_figure(fig, out_path)
+                    # Single pooled null histogram.
+                    all_z_null = np.concatenate(pooled_z_null)
 
-def main():
-    fr_db = FiringRateAnalysis(db_suffix="coords_updated")
-    file_path = fr_db.figdata_path
+                    fig, ax, legend_ax, inset = _make_axes(style["panel_figsize"]["null_hist"])
+                    n_sessions = len(sessions_used)
+                    title = (f"{_short_pair(target_pair)}\n"
+                             f"{fp.STIM_LABELS.get(stim, stim)}, {response_range}")
+                    _setup_histogram_ax(ax, all_z_null, title, style)
 
-    df = load_data(file_path)
+                    # One vertical line per session; all the same color since we
+                    # are interested in spread relative to the null, not per-session
+                    # differences.
+                    for z_actual in actual_z_values:
+                        ax.axvline(z_actual, color=ACTUAL_LINE_COLOR,
+                                   linewidth=style["line_width"] * 1.4, linestyle="-", alpha=0.7)
 
-    out_root = f"{file_path}/CCA_two_region_analysis/null_histograms"
+                    # Summarise the actual values (median + IQR) in the legend.
+                    median_z = np.median(actual_z_values)
+                    q25, q75 = np.percentile(actual_z_values, [25, 75])
+                    actual_handle = plt.Line2D(
+                        [0], [0], color=ACTUAL_LINE_COLOR, linewidth=style["line_width"] * 1.8,
+                        label=f"Actual values (n = {n_sessions})\n"
+                              f"median z = {median_z:.2f}\n"
+                              f"[{q25:.2f}, {q75:.2f}]")
+                    null_handle = plt.Line2D(
+                        [0], [0], color=NULL_COLOR, linewidth=8, alpha=0.85,
+                        label="Pooled null\ndistribution")
+                    zero_handle = plt.Line2D(
+                        [0], [0], color="black", linestyle="--", linewidth=style["line_width"],
+                        label="z = 0")
+                    _side_legend(legend_ax, ax, [null_handle, zero_handle, actual_handle])
+                    _add_alignment_inset(inset, target_pair, _is_orthogonal(actual_z_values), style)
+
+                    pair_dir = target_pair.replace(" ", "_").replace("/", "-")
+                    fp.save_figure(fig, f"{out_root}/combined/{stim}/{response_range}",
+                                   pair_dir, style, formats)
+
+
+def main(style_name="paper", formats=fp.DEFAULT_FORMATS, steps=("per_session", "combined"),
+         df=None, out_root=None):
+    if df is None:
+        fr_db = FiringRateAnalysis(db_suffix="coords_updated")
+        df = load_data(fr_db.figdata_path)
+    out_root = out_root or fp.figure_output_dir(FIG, style_name)
     os.makedirs(out_root, exist_ok=True)
 
-    print("Generating per-session histogram figures (Approach 1)...")
-    make_per_session_figures(df, out_root)
-
-    print("Generating combined histogram figures (Approach 2)...")
-    make_combined_figures(df, out_root)
-
+    if "per_session" in steps:
+        print("Generating per-session histogram figures (Approach 1)...")
+        make_per_session_figures(df, out_root, style_name, formats)
+    if "combined" in steps:
+        print("Generating combined histogram figures (Approach 2)...")
+        make_combined_figures(df, out_root, style_name, formats)
     print("Done.")
 
 
 if __name__ == "__main__":
-    main()
+    main(style_name="paper", formats=("png", "svg"))
+    # main(style_name="poster", formats=("svg",), steps=("combined",))
