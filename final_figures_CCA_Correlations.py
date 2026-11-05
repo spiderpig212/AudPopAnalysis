@@ -221,6 +221,6 @@ def main(style_name="paper", formats=fp.DEFAULT_FORMATS, response_range=fp.MAIN_
 
 
 if __name__ == "__main__":
-    main(style_name="paper", formats=("png", "svg"))
-    # main(style_name="poster", formats=("svg",))
+    # main(style_name="paper", formats=("png", "svg"))
+    main(style_name="poster", formats=("svg",))
     # main(response_range="onset")   # supplementary

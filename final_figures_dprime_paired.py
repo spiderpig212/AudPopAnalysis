@@ -24,20 +24,38 @@ Caveats: entries that share a stimulus are not fully independent (more so for
 the upper triangle than the near-diagonal); region maps may average different
 numbers of sessions (printed when run).
 
+Display options for heavy-tailed values (statistics are always on the raw values):
+  yscale="log"        log y-axis on the box plots; the companion panel then shows the
+                      per-pair log2 ratio (region b / region a) instead of the difference
+  clip_outliers=True  limit the axes to Q3 + clip_iqr * IQR (and Q1 - clip_iqr * IQR) and
+                      draw anything beyond as a triangle on the axis edge labeled with its
+                      true value. Works alone or together with yscale="log".
+Pairs whose value exceeds OUTLIER_FLAG_FACTOR x the panel median are printed at run time
+(with their averaged accuracy), since a huge D' usually means a near-perfectly separable
+pair with collapsed variance rather than a real effect.
+
+Text collisions (big poster fonts): before saving, resolve_text_overlap() measures the
+rendered tick labels and titles; overlapping x tick labels are first wrapped onto two lines
+("Ventral −\nPrimary"), then rotated 30 degrees if that is not enough, and overlapping
+titles are wrapped the same way. Any text that still overlaps is reported as a warning.
+
 Valid metric keys: "J_matrix", "dprime_matrix", "accuracy_matrix".
 """
 import itertools
 import os
+import re
 
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+from matplotlib.ticker import FuncFormatter, LogLocator, NullFormatter
 from scipy import stats
 
 import figure_params as fp
 from d_prime_RSA_visualization import load_rsa_data, STRIP_ALPHA_THRESHOLD, _p_to_stars
 from final_figures_dprime import _region_groups
 
+OUTLIER_FLAG_FACTOR = 5.0   # report pairs above this multiple of the panel median
 PAIRED_LINE_MAX = 40        # draw stimulus-pair lines only up to this many pairs
 STIM_TITLES = {"AM": "AM", "pureTones": "Pure Tones", "naturalSound": "Natural sounds"}
 KIND_TITLES = {"neardiag": "near-diagonal pairs", "upper": "all pairs",
@@ -73,9 +91,10 @@ def averaged_matrix(records, data_source, row_value, row_field, response_range, 
 
 def collect_paired_values(records, groups, response_range, metric_key, kind):
     """
-    Returns (values, session_counts): values is (n_groups, n_pairs), row g holding
-    group g's selected entries of its session-averaged map, in the same
-    stimulus-pair order for every group. None if any group has no data.
+    Returns (values, session_counts, (rows, cols)): values is (n_groups, n_pairs), row g
+    holding group g's selected entries of its session-averaged map, in the same
+    stimulus-pair order for every group; rows/cols are those entries' matrix indices.
+    None if any group has no data.
     """
     mats, counts = [], []
     for data_source, row_value, row_field in groups:
@@ -88,7 +107,7 @@ def collect_paired_values(records, groups, response_range, metric_key, kind):
     if len({m.shape for m in mats}) != 1:
         raise ValueError("Regions have different stimulus sets; cannot pair entries.")
     ii, jj = entry_indices(kind, mats[0].shape[0])
-    return np.stack([m[ii, jj] for m in mats]), counts
+    return np.stack([m[ii, jj] for m in mats]), counts, (ii, jj)
 
 
 def _correct(pvals, method):
@@ -132,12 +151,77 @@ def paired_tests(values, correction="bonferroni"):
 # ----------------------------------------------------------------------------
 # Drawing
 # ----------------------------------------------------------------------------
-def _bracket(ax, x1, x2, y, step, text, fontsize):
-    ax.plot([x1, x1, x2, x2], [y, y + step * 0.3, y + step * 0.3, y], lw=1.0, color="black")
-    ax.text((x1 + x2) / 2, y + step * 0.3, text, ha="center", va="bottom", fontsize=fontsize)
+def _bracket(ax, x1, x2, y0, y1, text, fontsize):
+    ax.plot([x1, x1, x2, x2], [y0, y1, y1, y0], lw=1.0, color="black")
+    ax.text((x1 + x2) / 2, y1, text, ha="center", va="bottom", fontsize=fontsize)
 
 
-def draw_paired_box(ax, values, tick_labels, colors, style, tests):
+def _fwd(v, log):
+    return np.log10(v) if log else np.asarray(v, dtype=float)
+
+
+def _inv(t, log):
+    return 10.0 ** t if log else t
+
+
+def _clip_bounds(arrays, factor):
+    """(lo, hi): limits at Q1 - factor*IQR / Q3 + factor*IQR of the most generous group.
+    A side is None when no value lies beyond it (nothing to clip there)."""
+    q = [np.percentile(a, [25, 75]) for a in arrays]
+    hi = max(q3 + factor * (q3 - q1) for q1, q3 in q)
+    lo = min(q1 - factor * (q3 - q1) for q1, q3 in q)
+    allv = np.concatenate([np.ravel(a) for a in arrays])
+    return (lo if allv.min() < lo else None), (hi if allv.max() > hi else None)
+
+
+def _clip(arr, lo, hi):
+    return np.clip(arr, -np.inf if lo is None else lo, np.inf if hi is None else hi)
+
+
+def _fmt(v):
+    text = f"{v:,.0f}" if abs(v) >= 100 else f"{v:.3g}"
+    return text.replace("-", "−")
+
+
+EDGE_LIST_MAX = 4   # list up to this many clipped values beside a marker; beyond it, a count and range
+
+
+def _edge_label(values, up):
+    """Text for the clipped values at one marker: one per line, most extreme first."""
+    vals = sorted(values, reverse=up)
+    if len(vals) <= EDGE_LIST_MAX:
+        return "\n".join(_fmt(v) for v in vals)
+    return f"{len(vals)} values\n{_fmt(vals[0])} to {_fmt(vals[-1])}"
+
+
+def _edge_markers(ax, x, y, true_values, up, style):
+    """
+    One triangle per (x, edge) for the values beyond the clip limit; x and y are the
+    markers' positions (all clipped values of a group share them), with the true values
+    listed beside it, stacked into the panel, so several clipped values never overlap.
+    """
+    if len(x) == 0:
+        return
+    ax.scatter(x[:1], y[:1], marker="^" if up else "v", s=style["pca_marker_size"] * 4, color="black",
+               linewidths=0, zorder=4, clip_on=False)
+    ax.annotate(_edge_label(list(true_values), up), (x[0], y[0]), xytext=(8, 4 if up else -4),
+                textcoords="offset points", ha="left", va="top" if up else "bottom",
+                fontsize=style["legend_fontsize"], linespacing=1.1, annotation_clip=False, zorder=5,
+                bbox=dict(boxstyle="square,pad=0.15", fc="white", ec="none", alpha=0.85))
+
+
+def _log_ticks(ax):
+    """Plain-number ticks on a log axis, denser when the axis spans less than a decade or two."""
+    lo, hi = ax.get_ylim()
+    decades = np.log10(hi / lo)
+    subs = (1, 2, 5) if decades >= 1.5 else (1, 2, 3, 5, 7) if decades >= 0.8 else tuple(range(1, 10))
+    ax.yaxis.set_major_locator(LogLocator(base=10, subs=subs))
+    ax.yaxis.set_major_formatter(FuncFormatter(lambda v, _: f"{v:g}"))
+    ax.yaxis.set_minor_formatter(NullFormatter())
+
+
+def draw_paired_box(ax, values, tick_labels, colors, style, tests, log=False, clip_iqr=None,
+                    axes_height_in=5.0):
     n_groups, n_pairs = values.shape
     pos = np.arange(n_groups)
     bp = ax.boxplot(list(values), positions=pos, widths=0.55, showfliers=False, patch_artist=True)
@@ -146,34 +230,66 @@ def draw_paired_box(ax, values, tick_labels, colors, style, tests):
         patch.set_alpha(0.7)
     for med in bp["medians"]:
         med.set_color("black")
+    if log:
+        ax.set_yscale("log")
 
+    # Everything below is computed in axis space (log10 when log) so clipping and
+    # bracket spacing are uniform on the plotted scale.
+    t = _fwd(values, log)
+    lo_b, hi_b = _clip_bounds(list(t), clip_iqr) if clip_iqr else (None, None)
+    tc = _clip(t, lo_b, hi_b)
+    shown = _inv(tc, log)
+
+    inside = (t >= (-np.inf if lo_b is None else lo_b)) & (t <= (np.inf if hi_b is None else hi_b))
     if n_pairs <= PAIRED_LINE_MAX:   # unjittered points, joined per stimulus pair
-        ax.plot(pos, values, color="0.5", lw=0.6, alpha=0.4, zorder=2)
-        for g in range(n_groups):
-            ax.scatter(np.full(n_pairs, pos[g]), values[g], s=style["pca_marker_size"], color="black",
-                       alpha=0.55, linewidths=0, zorder=3)
+        ax.plot(pos, shown, color="0.5", lw=0.6, alpha=0.4, zorder=2)
+        for g in range(n_groups):    # clipped values are drawn as the edge triangle instead
+            ax.scatter(np.full(inside[g].sum(), pos[g]), shown[g][inside[g]], s=style["pca_marker_size"],
+                       color="black", alpha=0.55, linewidths=0, zorder=3)
     elif n_pairs <= STRIP_ALPHA_THRESHOLD:
         rng = np.random.default_rng(0)
         for g in range(n_groups):
-            ax.scatter(pos[g] + (rng.random(n_pairs) - 0.5) * 0.3, values[g], s=style["pca_marker_size"] * 0.7,
-                       color="black", alpha=0.35, linewidths=0, zorder=3)
+            ax.scatter(pos[g] + (rng.random(n_pairs)[inside[g]] - 0.5) * 0.3, shown[g][inside[g]],
+                       s=style["pca_marker_size"] * 0.7, color="black", alpha=0.35, linewidths=0, zorder=3)
+    for g in range(n_groups):
+        for beyond, limit, up in ((t[g] > hi_b if hi_b is not None else None, hi_b, True),
+                                  (t[g] < lo_b if lo_b is not None else None, lo_b, False)):
+            if beyond is not None and beyond.any():
+                k = beyond.sum()
+                _edge_markers(ax, np.full(k, pos[g]), np.full(k, _inv(limit, log)), values[g][beyond], up, style)
 
-    span = max(values.max() - values.min(), 1e-9)
-    step, level = span * 0.08, 0
-    sig = sorted([t for t in tests if t["p_corrected"] < 0.05], key=lambda t: t["b"] - t["a"])
-    for t in sig:  # short brackets lowest
-        _bracket(ax, pos[t["a"]], pos[t["b"]], values.max() + step * (level + 1), step,
-                 _p_to_stars(t["p_corrected"]), style["star_fontsize"])
+    tmin, tmax = tc.min(), tc.max()
+    span = max(tmax - tmin, 1e-9)
+    level = 0
+    sig = sorted([x for x in tests if x["p_corrected"] < 0.05], key=lambda x: x["b"] - x["a"])
+    # Bracket spacing: at least 8% of the data span, and enough that a row of stars
+    # (star_fontsize) fits between one bracket and the next at this axes height.
+    n_sig = len(sig)
+    frac = 1.5 * style["star_fontsize"] / 72 / axes_height_in
+    step = max(span * 0.08, frac * span * 1.06 / max(1 - frac * (n_sig + 1.9), 0.2))
+    for x in sig:  # short brackets lowest
+        y0 = tmax + step * (level + 1)
+        _bracket(ax, pos[x["a"]], pos[x["b"]], _inv(y0, log), _inv(y0 + step * 0.3, log), 
+                 _p_to_stars(x["p_corrected"]), style["star_fontsize"])
         level += 1
+    ax.set_ylim(_inv(tmin - span * 0.06, log), _inv(tmax + (step * (level + 1.9) if sig else span * 0.06), log))
+    if log:
+        _log_ticks(ax)
     ax.set_xticks(pos)
     ax.set_xticklabels(tick_labels, fontsize=style["tick_fontsize"])
     ax.set_xlim(-0.6, n_groups - 0.4)
 
 
-def draw_differences(ax, values, short, style, tests, ylabel):
+def draw_differences(ax, values, short, style, tests, ylabel, log=False, clip_iqr=None):
+    """Per-pair difference (b - a), or log2 ratio (b / a) when log, for each tested region pair."""
     ax.axhline(0, color="0.3", ls="--", lw=1.0, zorder=1)
     rng = np.random.default_rng(1)
-    diffs = [values[t["b"]] - values[t["a"]] for t in tests]
+    if log:
+        diffs = [np.log2(values[x["b"]] / values[x["a"]]) for x in tests]
+        sep, ylabel = " / ", f"log₂ {ylabel} ratio"
+    else:
+        diffs = [values[x["b"]] - values[x["a"]] for x in tests]
+        sep, ylabel = " − ", f"Δ {ylabel}"
     pos = np.arange(len(tests))
     bp = ax.boxplot(diffs, positions=pos, widths=0.5, showfliers=False, patch_artist=True)
     for patch in bp["boxes"]:
@@ -181,21 +297,112 @@ def draw_differences(ax, values, short, style, tests, ylabel):
         patch.set_alpha(0.7)
     for med in bp["medians"]:
         med.set_color("black")
-    for p_i, d in zip(pos, diffs):
+
+    lo_b, hi_b = _clip_bounds(diffs, clip_iqr) if clip_iqr else (None, None)
+    shown = [_clip(d, lo_b, hi_b) for d in diffs]
+    for p_i, d, sh in zip(pos, diffs, shown):
         if d.size <= STRIP_ALPHA_THRESHOLD:
-            ax.scatter(p_i + (rng.random(d.size) - 0.5) * 0.3, d, s=style["pca_marker_size"] * 0.7,
+            keep = (d >= (-np.inf if lo_b is None else lo_b)) & (d <= (np.inf if hi_b is None else hi_b))
+            ax.scatter(p_i + (rng.random(d.size)[keep] - 0.5) * 0.3, sh[keep], s=style["pca_marker_size"] * 0.7,
                        color="black", alpha=0.4, linewidths=0, zorder=3)
-    top = max(np.max(d) for d in diffs)
-    bottom = min(np.min(d) for d in diffs)
+        for beyond, limit, up in ((d > hi_b if hi_b is not None else None, hi_b, True),
+                                  (d < lo_b if lo_b is not None else None, lo_b, False)):
+            if beyond is not None and beyond.any():
+                k = beyond.sum()
+                _edge_markers(ax, np.full(k, p_i), np.full(k, limit), d[beyond], up, style)
+
+    top = max(np.max(d) for d in shown)
+    bottom = min(np.min(d) for d in shown)
     span = max(top - bottom, 1e-9)
-    for p_i, t in zip(pos, tests):
-        ax.text(p_i, top + span * 0.04, _p_to_stars(t["p_corrected"]), ha="center", va="bottom",
-                fontsize=style["star_fontsize"])
+    for p_i, x in zip(pos, tests):  # stars pinned to the top of the axes, above any edge-marker labels
+        ax.text(p_i, 0.97, _p_to_stars(x["p_corrected"]), ha="center", va="top",
+                fontsize=style["star_fontsize"], transform=ax.get_xaxis_transform())
     ax.set_xticks(pos)
-    ax.set_xticklabels([f"{short[t['b']]} − {short[t['a']]}" for t in tests], fontsize=style["tick_fontsize"])
+    ax.set_xticklabels([f"{short[x['b']]}{sep}{short[x['a']]}" for x in tests], fontsize=style["tick_fontsize"])
     ax.set_xlim(-0.6, len(tests) - 0.4)
-    ax.set_ylabel(f"Δ {ylabel}", fontsize=style["label_fontsize"])
-    ax.set_ylim(min(bottom, 0) - span * 0.1, top + span * 0.22)  # room for the stars
+    ax.set_ylabel(ylabel, fontsize=style["label_fontsize"])
+    ax.set_ylim(min(bottom, 0) - span * 0.1, top + span * 0.32)  # room for the stars
+
+
+def flag_outliers(values, idx, short, accuracy=None, factor=OUTLIER_FLAG_FACTOR):
+    """Print stimulus pairs whose value in any region exceeds factor x the panel median."""
+    cols = np.where((values > factor * np.median(values)).any(axis=0))[0]
+    for k in cols:
+        line = ", ".join(f"{short[g]} {values[g, k]:.3g}" + (f" (acc {accuracy[g, k]:.2f})" if accuracy is not None else "")
+                         for g in range(values.shape[0]))
+        print(f"[paired]   large value, stimulus pair ({idx[0][k]}, {idx[1][k]}): {line}")
+
+
+# ----------------------------------------------------------------------------
+# Text overlap handling
+# ----------------------------------------------------------------------------
+def _extents(texts, renderer):
+    return [t.get_window_extent(renderer) for t in texts]
+
+
+def _any_overlap(texts, renderer):
+    bbs = _extents(texts, renderer)
+    return any(a.overlaps(b) for a, b in itertools.combinations(bbs, 2))
+
+
+def _wrap_label(text):
+    """Break a 'A − B' / 'A / B' / 'A → B' label after the operator."""
+    return re.sub(r" ([−/→]) ", r" \1\n", text, count=1)
+
+
+def _fix_xticklabels(fig, ax, renderer):
+    labels = ax.get_xticklabels()
+    if len(labels) < 2 or not _any_overlap(labels, renderer):
+        return
+    original = [l.get_text() for l in labels]
+    ax.set_xticklabels([_wrap_label(t) for t in original])
+    fig.canvas.draw()
+    if not _any_overlap(ax.get_xticklabels(), renderer):
+        return
+    ax.set_xticklabels(original, rotation=30, ha="right", rotation_mode="anchor")
+    fig.canvas.draw()
+
+
+def _fix_titles(fig, axes, renderer):
+    titles = [ax.title for ax in axes if ax.get_title()]
+    if len(titles) < 2 or not _any_overlap(titles, renderer):
+        return
+    for wrap in (lambda t: t.replace(", ", ",\n", 1), lambda t: t.replace(" (n", "\n(n", 1)):
+        for ax in axes:
+            if ax.get_title():
+                ax.set_title(wrap(ax.get_title()))
+        fig.canvas.draw()
+        if not _any_overlap([ax.title for ax in axes if ax.get_title()], renderer):
+            return
+
+
+def _visible_ticklabels(ax):
+    lo, hi = sorted(ax.get_ylim())
+    pad = 1e-9 + 0.001 * (hi - lo)
+    return [l for l, loc in zip(ax.get_yticklabels(), ax.get_yticks()) if lo - pad <= loc <= hi + pad and l.get_text()]
+
+
+def resolve_text_overlap(fig, label=""):
+    """Wrap or rotate colliding x tick labels, wrap colliding titles, then warn about leftovers."""
+    fig.canvas.draw()
+    renderer = fig.canvas.get_renderer()
+    axes = fig.axes
+    for ax in axes:
+        _fix_xticklabels(fig, ax, renderer)
+    _fix_titles(fig, [ax for ax in axes if ax.get_subplotspec().rowspan.start == 0], renderer)
+
+    items = []
+    for ax in axes:
+        items += [(f"x tick '{l.get_text()}'", l) for l in ax.get_xticklabels() if l.get_text()]
+        items += [(f"y tick '{l.get_text()}'", l) for l in _visible_ticklabels(ax)]
+        items += [(f"text '{t.get_text()}'", t) for t in ax.texts if t.get_text()]
+        items += [(f"title '{ax.get_title()}'", ax.title)] if ax.get_title() else []
+        items += [(f"ylabel '{ax.get_ylabel()}'", ax.yaxis.label)] if ax.get_ylabel() else []
+    fig.canvas.draw()
+    bbs = [t.get_window_extent(renderer) for _, t in items]
+    for (i, (na, _)), (j, (nb, _)) in itertools.combinations(list(enumerate(items)), 2):
+        if bbs[i].overlaps(bbs[j]):
+            print(f"[paired] WARNING {label}: overlapping text: {na!r} and {nb!r}".replace("\n", " "))
 
 
 # ----------------------------------------------------------------------------
@@ -204,7 +411,8 @@ def draw_differences(ax, values, short, style, tests, ylabel):
 def make_paired_figure(records, stim, data_source, out_dir, style_name="paper",
                        response_range=fp.MAIN_RESPONSE_RANGE, metric_key="J_matrix",
                        synthetic_kind="neardiag", correction="bonferroni",
-                       show_differences=True, share_y=False, formats=fp.DEFAULT_FORMATS):
+                       show_differences=True, share_y=False, yscale="linear",
+                       clip_outliers=False, clip_iqr=3.0, formats=fp.DEFAULT_FORMATS):
     style = fp.STYLES[style_name]
     groups, labels, colors = _region_groups(data_source)
     short = [fp.REGION_SHORT[g[1]] for g in groups]
@@ -218,13 +426,26 @@ def make_paired_figure(records, stim, data_source, out_dir, style_name="paper",
         if got is None:
             print(f"[paired] {stim}/{data_source}: missing region data, skipping")
             return
-        values, counts = got
+        values, counts, idx = got
+        acc = None
+        if metric_key != "accuracy_matrix":
+            acc_got = collect_paired_values(records, groups, response_range, "accuracy_matrix", kind)
+            acc = acc_got[0] if acc_got else None
+        flag_outliers(values, idx, short, acc)
         panels.append((kind, values, counts, *paired_tests(values, correction)))
     print(f"[paired] {stim}/{data_source}: sessions averaged per region "
           f"{dict(zip(short, panels[0][2]))}")
 
+    log = yscale == "log"
+    if log and min(p[1].min() for p in panels) <= 0:
+        print(f"[paired] {stim}/{data_source}: values <= 0, cannot use a log axis; falling back to linear")
+        log = False
+    clip = clip_iqr if clip_outliers else None
+
     n_cols, n_rows = len(panels), 2 if show_differences else 1
     fw, fh = style["figsize"]
+    fig_h = fh * (1.45 if show_differences else 1.0)
+    axes_height_in = fig_h * (2 / 3 if show_differences else 1.0) * 0.72   # approx., before layout
     with plt.rc_context(fp.rc_params(style)):
         fig, axes = plt.subplots(n_rows, n_cols, squeeze=False, layout="constrained", sharey="row" if share_y else False,
                                  figsize=(fw * n_cols, fh * (1.45 if show_differences else 1.0)),
@@ -232,7 +453,7 @@ def make_paired_figure(records, stim, data_source, out_dir, style_name="paper",
         stats_rows = []
         for c, (kind, values, counts, friedman, tests) in enumerate(panels):
             ax = axes[0][c]
-            draw_paired_box(ax, values, tick_labels, colors, style, tests)
+            draw_paired_box(ax, values, tick_labels, colors, style, tests, log, clip, axes_height_in)
             title = f"{STIM_TITLES[stim]}, {KIND_TITLES[kind]} (n = {values.shape[1]})"
             if friedman:
                 title += f"\nFriedman p = {friedman['p']:.2g}"
@@ -240,7 +461,7 @@ def make_paired_figure(records, stim, data_source, out_dir, style_name="paper",
             if c == 0 or not share_y:
                 ax.set_ylabel(ylabel, fontsize=style["label_fontsize"])
             if show_differences:
-                draw_differences(axes[1][c], values, short, style, tests, ylabel)
+                draw_differences(axes[1][c], values, short, style, tests, ylabel, log, clip)
                 if c > 0 and share_y:
                     axes[1][c].set_ylabel("")
 
@@ -256,6 +477,8 @@ def make_paired_figure(records, stim, data_source, out_dir, style_name="paper",
                                        p_corrected=t["p_corrected"], median_diff=t["median_diff"]))
 
         name = f"paired_{stim}_{data_source}_{response_range}_{'-'.join(kinds)}_{style_name}_{metric_tag}"
+        name += ("_log" if log else "") + ("_clip" if clip else "")
+        resolve_text_overlap(fig, name)
         fp.save_figure(fig, out_dir, name, style, formats)
     pd.DataFrame(stats_rows).to_csv(f"{out_dir}/{name}_stats.csv", index=False)
 
@@ -265,7 +488,8 @@ def make_paired_figure(records, stim, data_source, out_dir, style_name="paper",
 # ----------------------------------------------------------------------------
 def main(style_name="paper", response_ranges=(fp.MAIN_RESPONSE_RANGE,), metric_key="J_matrix",
          synthetic_kind="neardiag", correction="bonferroni", show_differences=True,
-         share_y=False, formats=fp.DEFAULT_FORMATS, records_by_stim=None, out_dir=None):
+         share_y=False, yscale="linear", clip_outliers=False, clip_iqr=3.0,
+         formats=fp.DEFAULT_FORMATS, records_by_stim=None, out_dir=None):
     if records_by_stim is None:
         from analysis_class import FiringRateAnalysis
         rsa_dir = f"{FiringRateAnalysis(db_suffix='coords_updated').figdata_path}/dprime_RSA"
@@ -279,11 +503,15 @@ def main(style_name="paper", response_ranges=(fp.MAIN_RESPONSE_RANGE,), metric_k
                 continue
             for data_source in ("raw", "cca"):
                 make_paired_figure(records, stim, data_source, out_dir, style_name, response_range,
-                                   metric_key, synthetic_kind, correction, show_differences, share_y, formats)
+                                   metric_key, synthetic_kind, correction, show_differences, share_y,
+                                   yscale, clip_outliers, clip_iqr, formats)
 
 
 if __name__ == "__main__":
-    main(style_name="paper", metric_key="J_matrix", synthetic_kind="upper", formats=("png", "svg"))
+    main(style_name="poster", metric_key="J_matrix", synthetic_kind="upper", formats=("svg",), clip_outliers=True)
+    # main(yscale="log", formats=("png", "svg"))                       # log axis, log2-ratio differences
+    # main(clip_outliers=True, formats=("png", "svg"))                 # linear axis, outliers as edge triangles
+    # main(yscale="log", clip_outliers=True, formats=("png", "svg"))   # both
     # main(style_name="paper", metric_key="accuracy_matrix", formats=("png", "svg"))
     # main(metric_key="accuracy_matrix", synthetic_kind="upper")   # all pairs instead of near-diagonal
     # main(correction="holm")

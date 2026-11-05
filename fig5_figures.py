@@ -334,6 +334,6 @@ def main(style_name="paper", formats=fp.DEFAULT_FORMATS, steps=("real", "cartoon
 
 
 if __name__ == "__main__":
-    main(style_name="paper", formats=("png", "svg"))
-    # main(style_name="poster", formats=("svg",))
+    # main(style_name="paper", formats=("png", "svg"))
+    main(style_name="poster", formats=("svg",))
     # main(steps=("cartoon",))   # cartoon only; needs no data

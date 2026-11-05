@@ -201,6 +201,7 @@ def main(style_name="paper", formats=fp.DEFAULT_FORMATS, steps=("pairs", "heatma
 
 
 if __name__ == "__main__":
-    main(style_name="paper", formats=("png", "svg"), metric_key="J_matrix")
+    # main(style_name="paper", formats=("png", "svg"), metric_key="J_matrix")
+    main(style_name="poster", formats=("svg",), metric_key="J_matrix")
     # main(style_name="paper", formats=("png", "svg"), metric_key="accuracy_matrix")
     # main(heatmap_sources=("raw",))   # raw Primary only, no CCA heat maps

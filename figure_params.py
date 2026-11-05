@@ -89,11 +89,11 @@ SEQUENTIAL_CMAP = "viridis"  # AM rate / tone frequency, low -> high
 # `panel_figsize` sizes each Figure 1 panel type.
 POSTER_STYLE = dict(
     figsize=(9, 8),
-    title_fontsize=22,
-    label_fontsize=20,
-    tick_fontsize=16,
-    legend_fontsize=15,
-    star_fontsize=16,
+    title_fontsize=32,
+    label_fontsize=30,
+    tick_fontsize=26,
+    legend_fontsize=25,
+    star_fontsize=26,
     box_width=0.6,
     dpi=300,
     line_width=2.0,

@@ -257,7 +257,7 @@ def make_combined_figures(df: pd.DataFrame, out_root: str):
                 pair_dir = target_pair.replace(" ", "_").replace("/", "-")
                 out_path = (
                     f"{out_root}/combined/{stim}/{response_range}/"
-                    f"{pair_dir}.png"
+                    f"{pair_dir}.svg"
                 )
                 _save_figure(fig, out_path)
 
