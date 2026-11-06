@@ -114,8 +114,8 @@ POSTER_STYLE = dict(
         method_strip_cartoon=(24, 5.5),
         pca_pair=(7, 6),
         heatmap=(8, 7),
-        null_hist=(17, 9),          # CCA null histograms (legend sits outside the axes)
-        null_hist_session=(16, 9.5),
+        null_hist=(17, 7.5),          # CCA null histograms (legend sits outside the axes)
+        null_hist_session=(16, 7.5),
     ),
 )
 
@@ -146,8 +146,8 @@ PAPER_STYLE = dict(
         method_strip_cartoon=(9.6, 2.8),
         pca_pair=(3.4, 3.0),
         heatmap=(3.6, 3.2),
-        null_hist=(6.6, 3.4),
-        null_hist_session=(6.2, 3.2),
+        null_hist=(6.4, 3.4),
+        null_hist_session=(5.8, 3.2),
     ),
 )
 

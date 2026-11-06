@@ -128,24 +128,9 @@ def _setup_histogram_ax(ax, z_null: np.ndarray, title: str, style: dict):
     ax.set_title(title)
 
 
-def _make_axes(figsize):
-    """
-    Histogram axes plus a right-hand column (laid out with the figure, so nothing can
-    collide): the legend on top and the subspace-alignment cartoon below it.
-    """
-    fig = plt.figure(figsize=figsize, layout="constrained")
-    gs = fig.add_gridspec(2, 2, width_ratios=[2, 1], height_ratios=[1, 1])
-    ax = fig.add_subplot(gs[:, 0])
-    legend_ax = fig.add_subplot(gs[0, 1])
-    inset = fig.add_subplot(gs[1, 1])
-    legend_ax.axis("off")
-    return fig, ax, legend_ax, inset
-
-
-def _side_legend(legend_ax, ax, handles=None):
-    legend_ax.legend(handles=handles if handles is not None else ax.get_legend_handles_labels()[0],
-                     loc="center left", bbox_to_anchor=(0.0, 0.5), frameon=False,
-                     handlelength=1.6)
+def _legend_outside(ax, handles=None):
+    """Legend beside the axes so it never covers the histogram or the actual-value lines."""
+    ax.legend(handles=handles, loc="upper left", bbox_to_anchor=(1.02, 1.0), frameon=False)
 
 
 def _pair_regions(target_pair: str):
@@ -158,13 +143,16 @@ def _pair_regions(target_pair: str):
     return out
 
 
-def _add_alignment_inset(inset, target_pair: str, orthogonal: bool, style: dict):
+def _add_alignment_inset(ax, target_pair: str, orthogonal: bool, style: dict):
     """
-    Cartoon of the two regions' subspaces beside the histogram: perpendicular ellipses
-    when the result is beyond +/-INSET_Z_THRESHOLD, strongly overlapping ones otherwise.
+    Cartoon of the two regions' subspaces in the top-left corner of the histogram axes:
+    perpendicular ellipses when the result is beyond +/-INSET_Z_THRESHOLD, strongly
+    overlapping ones otherwise. Colored by region; no text.
     """
     regions = _pair_regions(target_pair)
+    inset = ax.inset_axes([0.02, 0.60, 0.30, 0.38])
     inset.set_aspect("equal", adjustable="box")
+    inset.set_anchor("NW")
     angles = (0, 90) if orthogonal else (0, INSET_OVERLAP_ANGLE)
     for (_, color), angle in zip(regions, angles):
         inset.add_patch(Ellipse((0, 0), width=2.0, height=0.8, angle=angle, facecolor=color,
@@ -172,13 +160,6 @@ def _add_alignment_inset(inset, target_pair: str, orthogonal: bool, style: dict)
     inset.set_xlim(-1.1, 1.1)
     inset.set_ylim(-1.1, 1.1)
     inset.axis("off")
-    inset.set_title("More orthogonal" if orthogonal else "More aligned",
-                    fontsize=style["legend_fontsize"], pad=2)
-    fs = style["legend_fontsize"]
-    for k, (name, color) in enumerate(regions):   # region names stacked under the ellipses
-        inset.annotate(name, (0.5, 0.0), xycoords="axes fraction", xytext=(0, -4 - 1.3 * fs * k),
-                       textcoords="offset points", color=color, ha="center", va="top",
-                       fontsize=fs, fontweight="bold", annotation_clip=False)
 
 
 def _is_orthogonal(z_values) -> bool:
@@ -226,7 +207,8 @@ def make_per_session_figures(df: pd.DataFrame, out_root: str, style_name="paper"
                         # Actual value is already in z-score space.
                         z_actual = float(row["z_score_diff_from_null"])
 
-                        fig, ax, legend_ax, inset = _make_axes(style["panel_figsize"]["null_hist_session"])
+                        fig, ax = plt.subplots(figsize=style["panel_figsize"]["null_hist_session"],
+                                               layout="constrained")
                         title = (f"{_short_pair(target_pair)}\n"
                                  f"{fp.STIM_LABELS.get(stim, stim)}, {response_range}\n"
                                  f"session {session}")
@@ -234,8 +216,8 @@ def make_per_session_figures(df: pd.DataFrame, out_root: str, style_name="paper"
                         ax.axvline(z_actual, color=ACTUAL_LINE_COLOR,
                                    linewidth=style["line_width"] * 1.8, linestyle="-",
                                    label=f"Actual (z = {z_actual:.2f})")
-                        _side_legend(legend_ax, ax)
-                        _add_alignment_inset(inset, target_pair, _is_orthogonal([z_actual]), style)
+                        _legend_outside(ax)
+                        _add_alignment_inset(ax, target_pair, _is_orthogonal([z_actual]), style)
 
                         # Sanitise target_pair for use as a directory name.
                         pair_dir = target_pair.replace(" ", "_").replace("/", "-")
@@ -294,7 +276,8 @@ def make_combined_figures(df: pd.DataFrame, out_root: str, style_name="paper",
                     # Single pooled null histogram.
                     all_z_null = np.concatenate(pooled_z_null)
 
-                    fig, ax, legend_ax, inset = _make_axes(style["panel_figsize"]["null_hist"])
+                    fig, ax = plt.subplots(figsize=style["panel_figsize"]["null_hist"],
+                                           layout="constrained")
                     n_sessions = len(sessions_used)
                     title = (f"{_short_pair(target_pair)}\n"
                              f"{fp.STIM_LABELS.get(stim, stim)}, {response_range}")
@@ -321,8 +304,8 @@ def make_combined_figures(df: pd.DataFrame, out_root: str, style_name="paper",
                     zero_handle = plt.Line2D(
                         [0], [0], color="black", linestyle="--", linewidth=style["line_width"],
                         label="z = 0")
-                    _side_legend(legend_ax, ax, [null_handle, zero_handle, actual_handle])
-                    _add_alignment_inset(inset, target_pair, _is_orthogonal(actual_z_values), style)
+                    _legend_outside(ax, [null_handle, zero_handle, actual_handle])
+                    _add_alignment_inset(ax, target_pair, _is_orthogonal(actual_z_values), style)
 
                     pair_dir = target_pair.replace(" ", "_").replace("/", "-")
                     fp.save_figure(fig, f"{out_root}/combined/{stim}/{response_range}",
@@ -347,5 +330,5 @@ def main(style_name="paper", formats=fp.DEFAULT_FORMATS, steps=("per_session", "
 
 
 if __name__ == "__main__":
-    main(style_name="paper", formats=("png", "svg"))
-    # main(style_name="poster", formats=("svg",), steps=("combined",))
+    # main(style_name="paper", formats=("png", "svg"))
+    main(style_name="poster", formats=("svg",), steps=("combined",))
