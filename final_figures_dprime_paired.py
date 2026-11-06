@@ -1,5 +1,5 @@
 """
-Paired, stimulus-pair-level version of the final D' box plots (companion to
+Paired, stimulus-pair-level version of the final D' plots, drawn as violins (companion to
 final_figures_dprime.py, which is unchanged).
 
 Calculation
@@ -16,16 +16,17 @@ Statistics (per stimulus / panel)
     - Friedman test across the regions (omnibus, 3+ regions only)
     - post-hoc Wilcoxon signed-rank test for every region pair, two-sided,
       corrected for the number of region pairs (Bonferroni by default, or Holm)
-  Brackets mark corrected p < 0.05. Faint lines link each stimulus pair across
-  regions (hidden when there are many pairs), and a companion panel shows the
-  per-pair differences against zero.
+  Brackets mark corrected p < 0.05. Each distribution is a violin (kernel density of
+  the stimulus-pair values, with a dot at the median and a bar for the quartiles);
+  individual points and pairing lines are not drawn. A companion panel shows the
+  per-pair differences against zero, also as violins.
 
 Caveats: entries that share a stimulus are not fully independent (more so for
 the upper triangle than the near-diagonal); region maps may average different
 numbers of sessions (printed when run).
 
 Display options for heavy-tailed values (statistics are always on the raw values):
-  yscale="log"        log y-axis on the box plots; the companion panel then shows the
+  yscale="log"        log y-axis on the violins (density estimated in log space); the companion panel then shows the
                       per-pair log2 ratio (region b / region a) instead of the difference
   clip_outliers=True  limit the axes to Q3 + clip_iqr * IQR (and Q1 - clip_iqr * IQR) and
                       draw anything beyond as a triangle on the axis edge labeled with its
@@ -45,6 +46,7 @@ import itertools
 import os
 import re
 
+import matplotlib.colors as mcolors
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
@@ -52,11 +54,11 @@ from matplotlib.ticker import FuncFormatter, LogLocator, NullFormatter
 from scipy import stats
 
 import figure_params as fp
-from d_prime_RSA_visualization import load_rsa_data, STRIP_ALPHA_THRESHOLD, _p_to_stars
+from d_prime_RSA_visualization import load_rsa_data, _p_to_stars
 from final_figures_dprime import _region_groups
 
 OUTLIER_FLAG_FACTOR = 5.0   # report pairs above this multiple of the panel median
-PAIRED_LINE_MAX = 40        # draw stimulus-pair lines only up to this many pairs
+VIOLIN_WIDTH = 0.8          # full width of the widest part of a violin (x units)
 STIM_TITLES = {"AM": "AM", "pureTones": "Pure Tones", "naturalSound": "Natural sounds"}
 KIND_TITLES = {"neardiag": "near-diagonal pairs", "upper": "all pairs",
                "within": "within-source pairs", "between": "between-source pairs"}
@@ -183,6 +185,7 @@ def _fmt(v):
     return text.replace("-", "−")
 
 
+EDGE_LABEL_SCALE = 0.7   # edge-marker value lists use this fraction of legend_fontsize
 EDGE_LIST_MAX = 4   # list up to this many clipped values beside a marker; beyond it, a count and range
 
 
@@ -206,8 +209,8 @@ def _edge_markers(ax, x, y, true_values, up, style):
                linewidths=0, zorder=4, clip_on=False)
     ax.annotate(_edge_label(list(true_values), up), (x[0], y[0]), xytext=(8, 4 if up else -4),
                 textcoords="offset points", ha="left", va="top" if up else "bottom",
-                fontsize=style["legend_fontsize"], linespacing=1.1, annotation_clip=False, zorder=5,
-                bbox=dict(boxstyle="square,pad=0.15", fc="white", ec="none", alpha=0.85))
+                fontsize=max(7, style["legend_fontsize"] * EDGE_LABEL_SCALE), linespacing=1.1, annotation_clip=False,
+                zorder=5)
 
 
 def _log_ticks(ax):
@@ -220,16 +223,39 @@ def _log_ticks(ax):
     ax.yaxis.set_minor_formatter(NullFormatter())
 
 
-def draw_paired_box(ax, values, tick_labels, colors, style, tests, log=False, clip_iqr=None,
-                    axes_height_in=5.0):
+def _violin(ax, x, t, inside, color, style, log=False):
+    """
+    One violin at position x. t: all values in axis space (log10 when log); the density
+    is estimated from the values that lie inside the clip limits (`inside` mask), so
+    clipped outliers don't stretch it. Median dot and quartile bar use every value.
+    """
+    v = t[inside]
+    q1, med, q3 = np.percentile(t, [25, 50, 75])
+    half_w = VIOLIN_WIDTH / 2
+    face = mcolors.to_rgba(color, 0.7)
+    drawn = False
+    if v.size >= 3 and np.ptp(v) > 0:
+        try:
+            grid = np.linspace(v.min(), v.max(), 200)
+            dens = stats.gaussian_kde(v)(grid)
+            half = half_w * dens / dens.max()
+            ax.fill_betweenx(_inv(grid, log), x - half, x + half, facecolor=face, edgecolor="0.25",
+                             linewidth=style["line_width"], zorder=2)
+            drawn = True
+        except np.linalg.LinAlgError:
+            pass
+    if not drawn:  # too few / identical values: just a short bar at the median
+        ax.hlines(_inv(med, log), x - half_w / 2, x + half_w / 2, color="0.25",
+                  linewidth=style["line_width"] * 2, zorder=2)
+    ax.vlines(x, _inv(q1, log), _inv(q3, log), color="black", linewidth=style["line_width"] * 3, zorder=3)
+    ax.scatter([x], [_inv(med, log)], s=style["pca_marker_size"] * 2.5, color="white", edgecolors="black",
+               linewidths=style["line_width"] * 0.8, zorder=4)
+
+
+def draw_paired_violin(ax, values, tick_labels, colors, style, tests, log=False, clip_iqr=None,
+                       axes_height_in=5.0):
     n_groups, n_pairs = values.shape
     pos = np.arange(n_groups)
-    bp = ax.boxplot(list(values), positions=pos, widths=0.55, showfliers=False, patch_artist=True)
-    for patch, color in zip(bp["boxes"], colors):
-        patch.set_facecolor(color)
-        patch.set_alpha(0.7)
-    for med in bp["medians"]:
-        med.set_color("black")
     if log:
         ax.set_yscale("log")
 
@@ -238,19 +264,10 @@ def draw_paired_box(ax, values, tick_labels, colors, style, tests, log=False, cl
     t = _fwd(values, log)
     lo_b, hi_b = _clip_bounds(list(t), clip_iqr) if clip_iqr else (None, None)
     tc = _clip(t, lo_b, hi_b)
-    shown = _inv(tc, log)
 
     inside = (t >= (-np.inf if lo_b is None else lo_b)) & (t <= (np.inf if hi_b is None else hi_b))
-    if n_pairs <= PAIRED_LINE_MAX:   # unjittered points, joined per stimulus pair
-        ax.plot(pos, shown, color="0.5", lw=0.6, alpha=0.4, zorder=2)
-        for g in range(n_groups):    # clipped values are drawn as the edge triangle instead
-            ax.scatter(np.full(inside[g].sum(), pos[g]), shown[g][inside[g]], s=style["pca_marker_size"],
-                       color="black", alpha=0.55, linewidths=0, zorder=3)
-    elif n_pairs <= STRIP_ALPHA_THRESHOLD:
-        rng = np.random.default_rng(0)
-        for g in range(n_groups):
-            ax.scatter(pos[g] + (rng.random(n_pairs)[inside[g]] - 0.5) * 0.3, shown[g][inside[g]],
-                       s=style["pca_marker_size"] * 0.7, color="black", alpha=0.35, linewidths=0, zorder=3)
+    for g in range(n_groups):
+        _violin(ax, pos[g], t[g], inside[g], colors[g], style, log)
     for g in range(n_groups):
         for beyond, limit, up in ((t[g] > hi_b if hi_b is not None else None, hi_b, True),
                                   (t[g] < lo_b if lo_b is not None else None, lo_b, False)):
@@ -272,7 +289,7 @@ def draw_paired_box(ax, values, tick_labels, colors, style, tests, log=False, cl
         _bracket(ax, pos[x["a"]], pos[x["b"]], _inv(y0, log), _inv(y0 + step * 0.3, log), 
                  _p_to_stars(x["p_corrected"]), style["star_fontsize"])
         level += 1
-    ax.set_ylim(_inv(tmin - span * 0.06, log), _inv(tmax + (step * (level + 1.9) if sig else span * 0.06), log))
+    ax.set_ylim(_inv(tmin - span * 0.06, log), _inv(tmax + (step * (level + 1.9) if sig else span * 0.12), log))
     if log:
         _log_ticks(ax)
     ax.set_xticks(pos)
@@ -283,7 +300,6 @@ def draw_paired_box(ax, values, tick_labels, colors, style, tests, log=False, cl
 def draw_differences(ax, values, short, style, tests, ylabel, log=False, clip_iqr=None):
     """Per-pair difference (b - a), or log2 ratio (b / a) when log, for each tested region pair."""
     ax.axhline(0, color="0.3", ls="--", lw=1.0, zorder=1)
-    rng = np.random.default_rng(1)
     if log:
         diffs = [np.log2(values[x["b"]] / values[x["a"]]) for x in tests]
         sep, ylabel = " / ", f"log₂ {ylabel} ratio"
@@ -291,20 +307,12 @@ def draw_differences(ax, values, short, style, tests, ylabel, log=False, clip_iq
         diffs = [values[x["b"]] - values[x["a"]] for x in tests]
         sep, ylabel = " − ", f"Δ {ylabel}"
     pos = np.arange(len(tests))
-    bp = ax.boxplot(diffs, positions=pos, widths=0.5, showfliers=False, patch_artist=True)
-    for patch in bp["boxes"]:
-        patch.set_facecolor("0.75")
-        patch.set_alpha(0.7)
-    for med in bp["medians"]:
-        med.set_color("black")
 
     lo_b, hi_b = _clip_bounds(diffs, clip_iqr) if clip_iqr else (None, None)
     shown = [_clip(d, lo_b, hi_b) for d in diffs]
-    for p_i, d, sh in zip(pos, diffs, shown):
-        if d.size <= STRIP_ALPHA_THRESHOLD:
-            keep = (d >= (-np.inf if lo_b is None else lo_b)) & (d <= (np.inf if hi_b is None else hi_b))
-            ax.scatter(p_i + (rng.random(d.size)[keep] - 0.5) * 0.3, sh[keep], s=style["pca_marker_size"] * 0.7,
-                       color="black", alpha=0.4, linewidths=0, zorder=3)
+    for p_i, d in zip(pos, diffs):
+        inside = (d >= (-np.inf if lo_b is None else lo_b)) & (d <= (np.inf if hi_b is None else hi_b))
+        _violin(ax, p_i, d, inside, "0.75", style)
         for beyond, limit, up in ((d > hi_b if hi_b is not None else None, hi_b, True),
                                   (d < lo_b if lo_b is not None else None, lo_b, False)):
             if beyond is not None and beyond.any():
@@ -340,8 +348,10 @@ def _extents(texts, renderer):
     return [t.get_window_extent(renderer) for t in texts]
 
 
-def _any_overlap(texts, renderer):
-    bbs = _extents(texts, renderer)
+def _any_overlap(texts, renderer, gap=0.04):
+    """True if any two texts overlap, or sit closer than `gap` x their width (so labels that
+    only just touch count as colliding)."""
+    bbs = [b.expanded(1 + gap, 1) for b in _extents(texts, renderer)]
     return any(a.overlaps(b) for a, b in itertools.combinations(bbs, 2))
 
 
@@ -355,11 +365,17 @@ def _fix_xticklabels(fig, ax, renderer):
     if len(labels) < 2 or not _any_overlap(labels, renderer):
         return
     original = [l.get_text() for l in labels]
+    size = labels[0].get_fontsize()
     ax.set_xticklabels([_wrap_label(t) for t in original])
-    fig.canvas.draw()
-    if not _any_overlap(ax.get_xticklabels(), renderer):
-        return
+    for scale in (1.0, 0.9, 0.8):   # wrapped, then wrapped and slightly smaller
+        for l in ax.get_xticklabels():
+            l.set_fontsize(size * scale)
+        fig.canvas.draw()
+        if not _any_overlap(ax.get_xticklabels(), renderer):
+            return
     ax.set_xticklabels(original, rotation=30, ha="right", rotation_mode="anchor")
+    for l in ax.get_xticklabels():
+        l.set_fontsize(size)
     fig.canvas.draw()
 
 
@@ -389,6 +405,14 @@ def resolve_text_overlap(fig, label=""):
     axes = fig.axes
     for ax in axes:
         _fix_xticklabels(fig, ax, renderer)
+    rows = {}
+    for ax in axes:   # panels in one row share the smallest tick font any of them needed
+        rows.setdefault(ax.get_subplotspec().rowspan.start, []).append(ax)
+    for row_axes in rows.values():
+        smallest = min(l.get_fontsize() for ax in row_axes for l in ax.get_xticklabels())
+        for ax in row_axes:
+            for l in ax.get_xticklabels():
+                l.set_fontsize(smallest)
     _fix_titles(fig, [ax for ax in axes if ax.get_subplotspec().rowspan.start == 0], renderer)
 
     items = []
@@ -453,11 +477,11 @@ def make_paired_figure(records, stim, data_source, out_dir, style_name="paper",
         stats_rows = []
         for c, (kind, values, counts, friedman, tests) in enumerate(panels):
             ax = axes[0][c]
-            draw_paired_box(ax, values, tick_labels, colors, style, tests, log, clip, axes_height_in)
+            draw_paired_violin(ax, values, tick_labels, colors, style, tests, log, clip, axes_height_in)
             title = f"{STIM_TITLES[stim]}, {KIND_TITLES[kind]} (n = {values.shape[1]})"
             if friedman:
                 title += f"\nFriedman p = {friedman['p']:.2g}"
-            ax.set_title(title)
+            ax.set_title(title, pad=max(6, 0.35 * style["title_fontsize"]))
             if c == 0 or not share_y:
                 ax.set_ylabel(ylabel, fontsize=style["label_fontsize"])
             if show_differences:
